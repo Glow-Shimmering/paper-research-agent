@@ -77,7 +77,50 @@ def test_ask_ok(tmp_path):
     assert data["retrieval_only"] is False
     assert len(data["sources"]) == 1
     assert data["sources"][0]["title"] == "论文一"
+    assert data["sources"][0]["web"] is False
     assert len(data["hits"]) == 1
+    assert data["web_papers"] == []
+
+
+def test_ask_with_web(tmp_path, monkeypatch):
+    import paper_agent.answer as answer_mod
+    from paper_agent.websearch import WebPaper
+
+    monkeypatch.setattr(
+        answer_mod,
+        "search_papers",
+        lambda q, limit: [
+            WebPaper(
+                title="Web Paper Title", authors=["X"], year=2025,
+                abstract="abs", url="http://arxiv.org/abs/2501.1", pdf_url=None,
+            )
+        ],
+    )
+    s = make_env(tmp_path, ["注意力机制内容。"])
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+    r = client.post("/api/ask", json={"question": "问题", "web": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["sources"]) == 2
+    assert data["sources"][1]["web"] is True
+    assert data["sources"][1]["path"] == "http://arxiv.org/abs/2501.1"
+    assert len(data["web_papers"]) == 1
+    assert data["web_papers"][0]["title"] == "Web Paper Title"
+
+
+def test_ask_web_error_502(tmp_path, monkeypatch):
+    import paper_agent.answer as answer_mod
+    from paper_agent.websearch import WebSearchError
+
+    def boom(q, limit):
+        raise WebSearchError("arXiv 请求失败：超时")
+
+    monkeypatch.setattr(answer_mod, "search_papers", boom)
+    s = make_env(tmp_path, ["注意力机制内容。"])
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+    r = client.post("/api/ask", json={"question": "问题", "web": True})
+    assert r.status_code == 502
+    assert "arXiv 请求失败" in r.json()["detail"]
 
 
 def test_ask_retrieval_only(tmp_path):
@@ -90,6 +133,7 @@ def test_ask_retrieval_only(tmp_path):
     assert data["answer"] is None
     assert data["retrieval_only"] is True
     assert len(data["hits"]) == 1
+    assert data["web_papers"] == []
 
 
 def test_ask_empty_question_400(tmp_path):
@@ -137,3 +181,50 @@ def test_index_page(tmp_path):
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "论文助手" in r.text
+
+
+def test_websearch_endpoint(monkeypatch, tmp_path):
+    import paper_agent.webapp as webapp_mod
+    from paper_agent.websearch import WebPaper
+
+    monkeypatch.setattr(
+        webapp_mod,
+        "search_papers",
+        lambda q, limit: [
+            WebPaper(
+                title="Web Paper", authors=["A", "B"], year=2024,
+                abstract="摘要内容", url="http://arxiv.org/abs/2401.1",
+                pdf_url="http://arxiv.org/pdf/2401.1",
+            )
+        ],
+    )
+    s = make_env(tmp_path)
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+    r = client.get("/api/websearch", params={"q": "attention"})
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["papers"]) == 1
+    p = data["papers"][0]
+    assert p["title"] == "Web Paper"
+    assert p["pdf_url"] == "http://arxiv.org/pdf/2401.1"
+
+
+def test_websearch_empty_400(tmp_path):
+    s = make_env(tmp_path)
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+    assert client.get("/api/websearch", params={"q": "  "}).status_code == 400
+
+
+def test_websearch_error_502(monkeypatch, tmp_path):
+    import paper_agent.webapp as webapp_mod
+    from paper_agent.websearch import WebSearchError
+
+    def boom(q, limit):
+        raise WebSearchError("arXiv 请求失败：超时")
+
+    monkeypatch.setattr(webapp_mod, "search_papers", boom)
+    s = make_env(tmp_path)
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+    r = client.get("/api/websearch", params={"q": "attention"})
+    assert r.status_code == 502
+    assert "arXiv 请求失败" in r.json()["detail"]

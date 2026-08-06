@@ -12,6 +12,7 @@ from .indexer import index_library
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
 from .store import Store
+from .websearch import WebSearchError, search_papers
 
 WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 
@@ -91,19 +92,55 @@ def create_app(store=None, embedder=None, llm=None) -> FastAPI:
     @app.post("/api/ask")
     def api_ask(payload: dict):
         question = (payload or {}).get("question", "")
+        web = bool((payload or {}).get("web", False))
         if not question.strip():
             raise HTTPException(status_code=400, detail="question 不能为空")
         try:
-            answer, sources, hits, retrieval_only = answer_ask(
-                _store(), _embedder(), _llm(), question, top=8
+            answer, sources, hits, retrieval_only, web_papers = answer_ask(
+                _store(), _embedder(), _llm(), question, top=8, web=web
             )
         except LLMError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+        except WebSearchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
         return {
             "answer": answer,
             "sources": sources,
             "retrieval_only": retrieval_only,
             "hits": [_hit_dict(h) for h in hits],
+            "web_papers": [
+                {
+                    "title": p.title,
+                    "authors": p.authors,
+                    "year": p.year,
+                    "abstract": p.abstract,
+                    "url": p.url,
+                    "pdf_url": p.pdf_url,
+                }
+                for p in web_papers
+            ],
+        }
+
+    @app.get("/api/websearch")
+    def api_websearch(q: str = "", top: int = 5):
+        if not q.strip():
+            raise HTTPException(status_code=400, detail="q 不能为空")
+        try:
+            papers = search_papers(q, limit=top)
+        except WebSearchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        return {
+            "papers": [
+                {
+                    "title": p.title,
+                    "authors": p.authors,
+                    "year": p.year,
+                    "abstract": p.abstract,
+                    "url": p.url,
+                    "pdf_url": p.pdf_url,
+                }
+                for p in papers
+            ]
         }
 
     @app.post("/api/reindex")

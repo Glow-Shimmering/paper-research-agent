@@ -1,6 +1,7 @@
-"""RAG 问答管线：检索 → 拼 prompt → LLM 生成（带 [n] 引用）。"""
+"""RAG 问答管线：检索 → 拼 prompt → LLM 生成（带 [n] 引用）。可选联网（arXiv）。"""
 from .llm import LLMError
 from .search import hybrid_search
+from .websearch import WebPaper, search_papers
 
 _SYSTEM = (
     "你是一个严谨的论文检索助手。只依据「参考资料」中的论文片段回答问题；"
@@ -19,23 +20,42 @@ def _format_block(n: int, hit) -> str:
     return f"[{n}]《{hit.title}》{meta}：\n{hit.text}"
 
 
-def ask(store, embedder, llm, question: str, top: int = 8, per_paper_cap: int = 3):
-    """返回 (answer, sources, hits, retrieval_only)。
+def _format_web_block(n: int, wp: WebPaper) -> str:
+    meta = f"（{wp.year}）" if wp.year else ""
+    authors = "、".join(wp.authors[:3]) + (" 等" if len(wp.authors) > 3 else "")
+    return f"[{n}]《{wp.title}》{meta}[arXiv 联网] {authors}：\n{wp.abstract[:500]}"
 
-    - 空命中：answer="根据已有资料无法回答。"，sources=[]。
-    - LLM 未配置：retrieval_only=True，answer=None，hits 为检索结果。
+
+def ask(store, embedder, llm, question: str, top: int = 8, per_paper_cap: int = 3, web: bool = False):
+    """返回 (answer, sources, hits, retrieval_only, web_papers)。
+
+    - 空命中且无联网结果：answer="根据已有资料无法回答。"，sources=[]。
+    - LLM 未配置：retrieval_only=True，answer=None，hits/web_papers 为检索结果。
     - LLM 调用失败：抛 LLMError（hits 由调用方自行重取）。
+    - web=True 且联网失败：抛 WebSearchError。
+    - sources 项带 web 标记（False=本地库，True=arXiv 联网）。
     """
     hits = hybrid_search(store, embedder, question, top=top, per_paper_cap=per_paper_cap)
-    if not hits:
-        return "根据已有资料无法回答。", [], [], False
-    if llm is None or not llm.is_configured:
-        return None, [], hits, True
-    blocks = "\n\n".join(_format_block(i, h) for i, h in enumerate(hits, start=1))
-    user = f"问题：{question}\n\n参考资料：\n{blocks}"
-    answer_text = llm.chat(_SYSTEM, user)
+    web_papers: list[WebPaper] = []
+    if web:
+        web_papers = search_papers(question, limit=5)
+
+    if not hits and not web_papers:
+        return "根据已有资料无法回答。", [], [], False, []
+
+    blocks = [_format_block(i, h) for i, h in enumerate(hits, start=1)]
     sources = [
-        {"n": i, "title": h.title, "year": h.year, "path": h.path, "page": h.page}
+        {"n": i, "title": h.title, "year": h.year, "path": h.path, "page": h.page, "web": False}
         for i, h in enumerate(hits, start=1)
     ]
-    return answer_text, sources, hits, False
+    base = len(hits)
+    for i, wp in enumerate(web_papers, start=base + 1):
+        blocks.append(_format_web_block(i, wp))
+        sources.append({"n": i, "title": wp.title, "year": wp.year, "path": wp.url, "page": None, "web": True})
+
+    if llm is None or not llm.is_configured:
+        return None, [], hits, True, web_papers
+
+    user = f"问题：{question}\n\n参考资料：\n" + "\n\n".join(blocks)
+    answer_text = llm.chat(_SYSTEM, user)
+    return answer_text, sources, hits, False, web_papers

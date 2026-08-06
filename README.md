@@ -37,10 +37,14 @@ py -3.11 -m venv .venv
 paper index            # 索引当前目录（可加参数指定目录，如 paper index .\papers）
 paper list                    # 浏览论文库
 paper search "注意力机制"      # 混合检索
+paper websearch "llm survey"  # 联网检索 arXiv 论文（英文效果更佳）
 paper ask "这篇论文提出了什么方法？"  # 问答（需 API key）
+paper ask --web "问题"         # 问答时同时联网检索 arXiv 论文
 paper serve                   # 启动 Web 界面 http://127.0.0.1:8000
 paper status                  # 库与配置状态
 ```
+
+联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。
 
 ## 构建与测试
 

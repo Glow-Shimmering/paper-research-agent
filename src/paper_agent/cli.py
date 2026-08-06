@@ -11,6 +11,7 @@ from .indexer import index_library
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
 from .store import Store
+from .websearch import WebSearchError, search_papers
 
 app = typer.Typer(help="论文整理与检索助手：索引本地 PDF 论文库，提供检索与问答。")
 
@@ -154,21 +155,25 @@ def ask(
     question: str = typer.Argument(..., help="问题"),
     top: int = typer.Option(8, "--top", help="检索块数"),
     no_llm: bool = typer.Option(False, "--no-llm", help="不调用 LLM，仅显示检索结果"),
+    web: bool = typer.Option(False, "--web", help="同时联网检索 arXiv 论文（英文问题效果更佳）"),
     json: bool = typer.Option(False, "--json", help="输出 JSON"),
 ):
-    """基于论文库回答问题。"""
+    """基于论文库回答问题（--web 时补充 arXiv 联网资料）。"""
     config.ensure_data_dir()
     store = Store(config.DB_PATH)
     embedder = Embedder(config.EMBED_MODEL)
     llm = None if no_llm else LLMClient(config.LLM_BASE_URL, config.LLM_API_KEY, config.LLM_MODEL)
     try:
-        answer_text, sources, hits, retrieval_only = answer_ask(
-            store, embedder, llm, question, top=top
+        answer_text, sources, hits, retrieval_only, web_papers = answer_ask(
+            store, embedder, llm, question, top=top, web=web
         )
     except LLMError as exc:
         typer.echo(f"LLM 调用失败：{exc}（以下为检索结果）", err=True)
         hits = hybrid_search(store, embedder, question, top=top, per_paper_cap=3)
         _print_hits(hits)
+        raise typer.Exit(1)
+    except WebSearchError as exc:
+        typer.echo(f"联网检索失败：{exc}", err=True)
         raise typer.Exit(1)
 
     if json:
@@ -190,6 +195,17 @@ def ask(
                         }
                         for h in hits
                     ],
+                    "web_papers": [
+                        {
+                            "title": p.title,
+                            "authors": p.authors,
+                            "year": p.year,
+                            "abstract": p.abstract,
+                            "url": p.url,
+                            "pdf_url": p.pdf_url,
+                        }
+                        for p in web_papers
+                    ],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -202,11 +218,66 @@ def ask(
             typer.echo("\n来源：")
             for s in sources:
                 year = f"（{s['year']}）" if s["year"] else ""
-                typer.echo(f"  [{s['n']}] {s['title']}{year} 第{s['page']}页 — {s['path']}")
+                tag = " [arXiv 联网]" if s["web"] else ""
+                if s["page"] is not None:
+                    typer.echo(f"  [{s['n']}] {s['title']}{year} 第{s['page']}页 — {s['path']}{tag}")
+                else:
+                    typer.echo(f"  [{s['n']}] {s['title']}{year} — {s['path']}{tag}")
+        if web and not web_papers:
+            typer.echo("\n（联网检索未找到相关结果，以上基于本地库回答；arXiv 以英文为主，英文问题更佳）")
     else:
         if retrieval_only:
             typer.echo("未配置 PAPER_LLM_API_KEY（或 --no-llm），仅显示检索结果；配置后获得生成式回答。")
         _print_hits(hits)
+        if web_papers:
+            typer.echo("\n联网检索（arXiv）：")
+            for p in web_papers:
+                year = f"（{p.year}）" if p.year else ""
+                typer.echo(f"  {p.title}{year} — {p.url}" + (f" | PDF: {p.pdf_url}" if p.pdf_url else ""))
+
+
+@app.command()
+def websearch(
+    query: str = typer.Argument(..., help="检索词（英文效果最佳）"),
+    top: int = typer.Option(5, "--top", help="返回条数"),
+    json: bool = typer.Option(False, "--json", help="输出 JSON"),
+):
+    """联网检索 arXiv 论文。"""
+    try:
+        papers = search_papers(query, limit=top)
+    except WebSearchError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(1)
+    if json:
+        typer.echo(
+            _json.dumps(
+                [
+                    {
+                        "title": p.title,
+                        "authors": p.authors,
+                        "year": p.year,
+                        "abstract": p.abstract,
+                        "url": p.url,
+                        "pdf_url": p.pdf_url,
+                    }
+                    for p in papers
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    if not papers:
+        typer.echo("未找到相关论文（arXiv 以英文为主，建议用英文查询）。")
+        return
+    for p in papers:
+        year = f"（{p.year}）" if p.year else ""
+        authors = "、".join(p.authors[:3]) + (" 等" if len(p.authors) > 3 else "")
+        typer.echo(f"{p.title}{year} — {authors}")
+        typer.echo(f"    {p.url}" + (f" | PDF: {p.pdf_url}" if p.pdf_url else ""))
+        if p.abstract:
+            typer.echo(f"    {p.abstract[:120]}")
+    typer.echo(f"共 {len(papers)} 条结果")
 
 
 def _print_hits(hits) -> None:

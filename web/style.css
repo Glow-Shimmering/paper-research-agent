@@ -11,6 +11,7 @@ main { max-width: 960px; margin: 20px auto; padding: 0 16px; }
 .row input { flex: 1; padding: 8px 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; }
 .row button { padding: 8px 16px; border: none; background: #1a73e8; color: #fff; border-radius: 6px; cursor: pointer; }
 .row button:hover { background: #1765cc; }
+.check { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #555; white-space: nowrap; cursor: pointer; }
 .hit { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
 .hit-head { display: flex; justify-content: space-between; align-items: baseline; }
 .hit-title { font-weight: 600; }

@@ -1,10 +1,11 @@
-"""配置：环境变量 + .env 加载。"""
+"""配置：环境变量 + .env 加载（.env 固定取项目根，与运行目录无关）。"""
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
 
 LIBRARY_DIR = Path(os.getenv("PAPER_DATA_DIR", str(Path.home() / ".paper-agent")))
 DB_PATH = LIBRARY_DIR / "library.db"

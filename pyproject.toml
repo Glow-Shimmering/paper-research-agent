@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-agent"
+version = "0.0.1"
+description = "论文整理与检索 Agent：整理本地论文资料库，提供检索与问答能力"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.24",
+    "fastembed>=0.3",
+    "rank-bm25>=0.2.2",
+    "jieba>=0.42",
+    "numpy>=1.26",
+    "typer>=0.12",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "openai>=1.30",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+paper = "paper_agent.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

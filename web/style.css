@@ -1,0 +1,28 @@
+* { box-sizing: border-box; }
+body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+header { background: #fff; padding: 12px 24px; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 24px; }
+header h1 { font-size: 18px; margin: 0; }
+.tab { border: none; background: none; padding: 8px 14px; cursor: pointer; font-size: 14px; border-radius: 6px; }
+.tab.active { background: #e8f0fe; color: #1a73e8; font-weight: 600; }
+main { max-width: 960px; margin: 20px auto; padding: 0 16px; }
+.tabpanel { display: none; }
+.tabpanel.active { display: block; }
+.row { display: flex; gap: 8px; margin-bottom: 12px; }
+.row input { flex: 1; padding: 8px 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; }
+.row button { padding: 8px 16px; border: none; background: #1a73e8; color: #fff; border-radius: 6px; cursor: pointer; }
+.row button:hover { background: #1765cc; }
+.hit { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
+.hit-head { display: flex; justify-content: space-between; align-items: baseline; }
+.hit-title { font-weight: 600; }
+.hit-score { color: #888; font-size: 12px; }
+.hit-meta { color: #888; font-size: 12px; margin: 2px 0 6px; word-break: break-all; }
+.hit-text { font-size: 14px; white-space: pre-wrap; }
+pre { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px 16px; white-space: pre-wrap; min-height: 60px; }
+#ask-sources { margin-top: 12px; font-size: 13px; color: #555; }
+.src-head { font-weight: 600; margin-bottom: 4px; }
+.hint { background: #fff7e6; border: 1px solid #ffd591; color: #874d00; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+.hidden { display: none; }
+table { width: 100%; border-collapse: collapse; background: #fff; }
+th, td { border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 13px; word-break: break-all; }
+th { background: #fafafa; }
+#lib-info { margin-top: 8px; color: #555; font-size: 13px; }

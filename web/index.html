@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>论文助手</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>论文助手</h1>
+  <nav>
+    <button data-tab="search" class="tab active">检索</button>
+    <button data-tab="ask" class="tab">问答</button>
+    <button data-tab="library" class="tab">论文库</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-search" class="tabpanel active">
+    <div class="row">
+      <input id="search-q" placeholder="输入检索词，如：注意力机制">
+      <button id="search-btn">检索</button>
+    </div>
+    <div id="search-results"></div>
+  </section>
+  <section id="tab-ask" class="tabpanel">
+    <div class="row">
+      <input id="ask-q" placeholder="输入问题，如：这篇论文提出了什么方法？">
+      <button id="ask-btn">提问</button>
+    </div>
+    <div id="ask-hint" class="hint hidden"></div>
+    <pre id="ask-answer"></pre>
+    <div id="ask-sources"></div>
+  </section>
+  <section id="tab-library" class="tabpanel">
+    <div class="row">
+      <input id="lib-q" placeholder="按标题/作者筛选">
+      <button id="lib-btn">筛选</button>
+      <button id="reindex-btn">重新索引</button>
+    </div>
+    <table id="lib-table">
+      <thead><tr><th>标题</th><th>作者</th><th>年份</th><th>页数</th><th>分块</th><th>路径</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="lib-info"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

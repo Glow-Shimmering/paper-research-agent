@@ -34,7 +34,7 @@ py -3.11 -m venv .venv
 ## 用法
 
 ```powershell
-paper index .\papers          # 索引论文目录（首次下载嵌入模型）
+paper index            # 索引当前目录（可加参数指定目录，如 paper index .\papers）
 paper list                    # 浏览论文库
 paper search "注意力机制"      # 混合检索
 paper ask "这篇论文提出了什么方法？"  # 问答（需 API key）

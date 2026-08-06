@@ -22,7 +22,7 @@ def _todo(cmd: str) -> None:
 
 @app.command()
 def index(
-    dir: str = typer.Argument(..., help="PDF 论文目录"),
+    dir: str = typer.Argument(".", help="PDF 论文目录（默认当前目录）"),
     force: bool = typer.Option(False, "--force", help="嵌入模型变更时强制全量重建"),
     refine: bool = typer.Option(False, "--refine", help="用 LLM 提炼元数据（需要配置 API key）"),
     no_prune: bool = typer.Option(False, "--no-prune", help="不删除库中已消失文件的条目"),

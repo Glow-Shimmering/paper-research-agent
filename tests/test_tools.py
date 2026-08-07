@@ -33,7 +33,8 @@ def test_tools_schema_complete():
 
     names = [t["function"]["name"] for t in TOOLS]
     assert set(names) == SCHEMA_NAMES == {
-        "local_search", "web_search", "download_paper", "index_papers", "list_papers", "library_status",
+        "local_search", "web_search", "download_paper", "index_papers", "list_papers",
+        "library_status", "save_note", "list_notes",
     }
     for t in TOOLS:
         assert t["type"] == "function"
@@ -161,6 +162,65 @@ def test_unknown_tool(tmp_path):
     ctx = make_ctx(tmp_path)
     out = execute_tool("no_such_tool", {}, ctx)
     assert "未知工具" in out and "local_search" in out
+
+
+def test_save_note_creates_dir_and_file(monkeypatch, tmp_path):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path)
+    out = execute_tool("save_note", {"filename": "总结.md", "content": "这是一篇总结"}, ctx)
+    assert "已保存" in out and "总结.md" in out
+    assert (notes / "总结.md").read_text(encoding="utf-8") == "这是一篇总结"
+
+
+def test_save_note_no_overwrite(monkeypatch, tmp_path):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    notes.mkdir()
+    (notes / "a.md").write_text("v1", encoding="utf-8")
+    ctx = make_ctx(tmp_path)
+    out = execute_tool("save_note", {"filename": "a.md", "content": "v2"}, ctx)
+    assert "a (1).md" in out
+    assert (notes / "a.md").read_text(encoding="utf-8") == "v1"
+    assert (notes / "a (1).md").read_text(encoding="utf-8") == "v2"
+
+
+def test_save_note_path_traversal_blocked(monkeypatch, tmp_path):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path)
+    out = execute_tool("save_note", {"filename": "../../../evil.md", "content": "x"}, ctx)
+    assert "已保存" in out
+    # 只落在 notes 目录内，且文件名被清洗
+    saved = list(notes.glob("*.md"))
+    assert len(saved) == 1
+    assert saved[0].name == "evil.md"
+    assert not (tmp_path.parent / "evil.md").exists()
+
+
+def test_save_note_invalid_chars(monkeypatch, tmp_path):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path)
+    out = execute_tool("save_note", {"filename": "a|b?c*.md", "content": "x"}, ctx)
+    assert "已保存" in out
+    assert (notes / "a_b_c_.md").exists()
+
+
+def test_list_notes(monkeypatch, tmp_path):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    notes.mkdir()
+    (notes / "n1.md").write_text("12345", encoding="utf-8")
+    ctx = make_ctx(tmp_path)
+    out = execute_tool("list_notes", {}, ctx)
+    assert "n1.md" in out and "size" in out
+    # 空目录
+    (notes / "n1.md").unlink()
+    assert "空" in execute_tool("list_notes", {}, ctx)
+    # 不存在
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: tmp_path / "nope")
+    assert "不存在" in execute_tool("list_notes", {}, ctx)
 
 
 def test_tool_error_returns_text(tmp_path):

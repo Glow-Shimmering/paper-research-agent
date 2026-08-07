@@ -1,5 +1,6 @@
 """textual TUI：论文助手对话界面（模型可调用工具）。"""
 import asyncio
+from datetime import datetime
 
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Input, RichLog
@@ -7,6 +8,10 @@ from textual.widgets import Footer, Header, Input, RichLog
 from . import __version__
 from .chat import chat_turn
 from .tools import ToolContext
+
+
+def _now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
 class ChatApp(App):
@@ -65,14 +70,50 @@ class ChatApp(App):
             self._messages.clear()
             self.query_one("#log", RichLog).clear()
             return "handled"
+        if text == "/export":
+            return self._export_chat()
         if text == "/help":
             self._log(
-                "[yellow]命令：/clear 清空对话，/quit 退出。"
+                "[yellow]命令：/clear 清空对话，/export 导出对话为文件，/quit 退出。"
                 "工具：local_search 本地检索 / web_search arXiv 搜索 / download_paper 下载并索引 / "
-                "index_papers 索引目录 / list_papers 论文列表 / library_status 库状态[/yellow]"
+                "index_papers 索引目录 / list_papers 论文列表 / library_status 库状态 / "
+                "save_note 保存笔记 / list_notes 笔记列表[/yellow]"
             )
             return "handled"
         return None
+
+    def _export_chat(self) -> str:
+        from . import config
+
+        if not self._messages:
+            self._log("[yellow]当前没有对话内容可导出。[/yellow]")
+            return "handled"
+        notes = config.notes_dir()
+        notes.mkdir(parents=True, exist_ok=True)
+        path = notes / f"chat-{_now_stamp()}.md"
+        path.write_text(self._export_markdown(), encoding="utf-8")
+        self._log(f"[green]对话已导出到 {path}[/green]")
+        return "handled"
+
+    def _export_markdown(self) -> str:
+        lines = []
+        for msg in self._messages:
+            if msg["role"] == "user":
+                lines.append(f"**你**：{msg['content']}\n")
+            elif msg["role"] == "assistant":
+                if msg.get("content"):
+                    lines.append(f"**助手**：{msg['content']}\n")
+                for tc in msg.get("tool_calls", []):
+                    lines.append(f"- 调用工具 `{tc['function']['name']}({tc['function']['arguments']})`\n")
+            elif msg["role"] == "tool":
+                lines.append(f"  ↳ 结果：{msg['content'][:500]}\n")
+        return "\n".join(lines)
+
+    def _respond_done(self) -> None:
+        """恢复输入框可用与焦点（disable/enable 会丢失焦点）。"""
+        inp = self.query_one(Input)
+        inp.disabled = False
+        inp.focus()
 
     async def _respond(self) -> None:
         try:
@@ -81,7 +122,7 @@ class ChatApp(App):
             )
         except Exception as exc:
             self._log(f"[red]调用失败：{exc}[/red]")
-            self.query_one(Input).disabled = False
+            self._respond_done()
             return
         self._messages = new_messages
         for entry in logs:
@@ -94,7 +135,7 @@ class ChatApp(App):
                 self._log(f"[dim]  ↳ {head}[/dim]")
             elif entry.role == "error":
                 self._log(f"[red]{entry.content}[/red]")
-        self.query_one(Input).disabled = False
+        self._respond_done()
 
     def _log(self, text: str) -> None:
         self.query_one("#log", RichLog).write(text)

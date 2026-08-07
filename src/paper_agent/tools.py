@@ -145,6 +145,53 @@ def _library_status(ctx: ToolContext) -> str:
     )
 
 
+def _sanitize_filename(name: str) -> str:
+    """清洗为合法 Windows 文件名：去非法字符、控制字符，截断长度。"""
+    import re
+
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
+    stem, dot, ext = name.rpartition(".")
+    if len(name) > 100:
+        name = (stem[: 100 - len(ext) - 1] + dot + ext) if dot else name[:100]
+    return name
+
+
+def _save_note(ctx: ToolContext, filename: str, content: str) -> str:
+    """保存笔记到 notes 目录：自动创建目录；同名自动加后缀不覆盖；仅允许单文件名。"""
+    from . import config
+
+    if len(content) > 1_000_000:
+        return "内容过长（超过 1MB），请分段保存。"
+    name = _sanitize_filename(Path(filename).name)  # 只取 basename，防路径穿越
+    if not name:
+        return "文件名无效。"
+    notes = config.notes_dir()
+    notes.mkdir(parents=True, exist_ok=True)
+    target = notes / name
+    if target.exists():
+        stem, ext = target.stem, target.suffix
+        i = 1
+        while (notes / f"{stem} ({i}){ext}").exists():
+            i += 1
+        target = notes / f"{stem} ({i}){ext}"
+    target.write_text(content, encoding="utf-8")
+    return f"已保存到 {target}"
+
+
+def _list_notes(ctx: ToolContext) -> str:
+    from . import config
+
+    notes = config.notes_dir()
+    if not notes.is_dir():
+        return "notes 目录不存在（还没有保存过笔记）。"
+    files = sorted(p for p in notes.iterdir() if p.is_file())
+    if not files:
+        return "notes 目录为空。"
+    return json.dumps(
+        [{"name": f.name, "size": f.stat().st_size} for f in files], ensure_ascii=False
+    )
+
+
 _REGISTRY: dict[str, tuple[dict, Callable]] = {
     "local_search": (
         {
@@ -241,6 +288,35 @@ _REGISTRY: dict[str, tuple[dict, Callable]] = {
             },
         },
         _library_status,
+    ),
+    "save_note": (
+        {
+            "type": "function",
+            "function": {
+                "name": "save_note",
+                "description": "把内容保存为本地笔记文件（保存到 notes 目录，自动创建目录；同名文件自动加序号后缀，不会覆盖已有文件；filename 只能是文件名，不支持子目录）。整理文献笔记、总结、导出对话等场景使用。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string", "description": "文件名，如 注意力机制笔记.md"},
+                        "content": {"type": "string", "description": "要保存的文本内容"},
+                    },
+                    "required": ["filename", "content"],
+                },
+            },
+        },
+        _save_note,
+    ),
+    "list_notes": (
+        {
+            "type": "function",
+            "function": {
+                "name": "list_notes",
+                "description": "列出 notes 目录中已保存的笔记文件（文件名与大小）。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        _list_notes,
     ),
 }
 

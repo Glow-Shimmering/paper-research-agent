@@ -103,3 +103,42 @@ def test_chat_app_clear(tmp_path):
     first, cleared = asyncio.run(run())
     assert first != ""
     assert cleared == ""
+
+
+def test_chat_app_export(tmp_path, monkeypatch):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    llm = FakeLLM(
+        [
+            {"content": None, "tool_calls": [{"id": "c1", "name": "library_status", "arguments": {}}]},
+            {"content": "库里有 1 篇论文。", "tool_calls": []},
+        ]
+    )
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.llm = llm
+        app = ChatApp(llm=llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "库里有什么？"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.1)
+                if not app.query_one(Input).disabled:
+                    break
+            inp.value = "/export"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return log_text(app)
+
+    text = asyncio.run(run())
+    assert "对话已导出" in text
+    exported = list(notes.glob("chat-*.md"))
+    assert len(exported) == 1
+    content = exported[0].read_text(encoding="utf-8")
+    assert "**你**：库里有什么？" in content
+    assert "**助手**：库里有 1 篇论文。" in content
+    assert "library_status" in content

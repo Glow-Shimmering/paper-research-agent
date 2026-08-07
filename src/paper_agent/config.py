@@ -35,6 +35,14 @@ def download_dir_override() -> Optional[Path]:
     return None
 
 
+def notes_dir() -> Path:
+    """笔记保存目录：PAPER_NOTE_DIR 显式设置优先，否则 PAPER_DATA_DIR 下 notes。"""
+    raw = os.getenv("PAPER_NOTE_DIR")
+    if raw:
+        return Path(raw).resolve()
+    return LIBRARY_DIR / "notes"
+
+
 def ensure_data_dir() -> Path:
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     return LIBRARY_DIR

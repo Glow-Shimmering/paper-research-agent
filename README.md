@@ -29,6 +29,7 @@ py -3.11 -m venv .venv
 | `PAPER_EMBED_MODEL` | `BAAI/bge-small-zh-v1.5` | 嵌入模型（首次索引联网下载 ~100MB） |
 | `PAPER_DATA_DIR` | `~/.paper-agent` | 数据库目录 |
 | `PAPER_DOWNLOAD_DIR` | （未设） | 对话中下载论文的保存目录（不设则用 `PAPER_DATA_DIR`，再不行用论文库目录） |
+| `PAPER_NOTE_DIR` | `PAPER_DATA_DIR/notes` | 笔记保存目录（`save_note` 工具与 `/export` 命令） |
 
 > 首次 `paper index` 需联网下载嵌入模型（~100MB，缓存于本地）。国内网络直连 HuggingFace 常失败：在 `.env` 中设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_DISABLE_XET=1`（镜像不支持 Xet 存储，缺一不可）。
 
@@ -48,7 +49,7 @@ paper status                  # 库与配置状态
 
 联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。
 
-`paper chat` 为终端对话界面（textual）：模型通过 function calling 自主调用工具——本地库检索（local_search）、arXiv 搜索（web_search）、下载并索引论文（download_paper，支持 arXiv URL）、索引目录（index_papers）、论文列表（list_papers）、库状态（library_status）。对话内输入 `/help`、`/clear`、`/quit`。
+`paper chat` 为终端对话界面（textual）：模型通过 function calling 自主调用工具——本地库检索（local_search）、arXiv 搜索（web_search）、下载并索引论文（download_paper，支持 arXiv URL）、索引目录（index_papers）、论文列表（list_papers）、库状态（library_status）、保存笔记（save_note，自动创建 notes 目录，同名不覆盖）、笔记列表（list_notes）。对话内输入 `/help`、`/clear`、`/export`（导出对话为文件）、`/quit`。终端里复制文字：按住 Shift + 鼠标拖动框选。
 
 ## 构建与测试
 

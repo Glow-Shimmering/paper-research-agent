@@ -40,11 +40,14 @@ paper search "注意力机制"      # 混合检索
 paper websearch "llm survey"  # 联网检索 arXiv 论文（英文效果更佳）
 paper ask "这篇论文提出了什么方法？"  # 问答（需 API key）
 paper ask --web "问题"         # 问答时同时联网检索 arXiv 论文
+paper chat                    # TUI 对话：模型自动调用工具（检索/搜索/下载/索引）
 paper serve                   # 启动 Web 界面 http://127.0.0.1:8000
 paper status                  # 库与配置状态
 ```
 
 联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。
+
+`paper chat` 为终端对话界面（textual）：模型通过 function calling 自主调用工具——本地库检索（local_search）、arXiv 搜索（web_search）、下载并索引论文（download_paper，支持 arXiv URL）、索引目录（index_papers）、论文列表（list_papers）、库状态（library_status）。对话内输入 `/help`、`/clear`、`/quit`。
 
 ## 构建与测试
 

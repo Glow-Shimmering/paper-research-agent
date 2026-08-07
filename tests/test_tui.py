@@ -1,0 +1,105 @@
+import asyncio
+
+from paper_agent.models import Chunk
+from paper_agent.store import Store
+from paper_agent.tools import ToolContext
+from paper_agent.tui import ChatApp
+from textual.widgets import Input, RichLog
+
+from helpers import FakeEmbedder, make_paper
+
+
+class FakeLLM:
+    is_configured = True
+
+    def __init__(self, script):
+        self.script = list(script)
+
+    def chat_with_tools(self, system, messages, tools):
+        return self.script.pop(0)
+
+
+def make_ctx(tmp_path):
+    s = Store(tmp_path / "t.db")
+    pid = s.upsert_paper(make_paper("a.pdf", title="注意力机制研究", year=2023))
+    s.replace_chunks(
+        pid, [Chunk(None, pid, 0, 1, "注意力机制是文本分类的关键技术。", FakeEmbedder.vecs_for("x"))]
+    )
+    return ToolContext(store=s, embedder=FakeEmbedder(), llm=FakeLLM([]))
+
+
+def log_text(app) -> str:
+    log = app.query_one("#log", RichLog)
+    return "\n".join(strip.text for strip in log.lines)
+
+
+def test_chat_app_help_command(tmp_path):
+    async def run():
+        ctx = make_ctx(tmp_path)
+        app = ChatApp(llm=ctx.llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "/help"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return log_text(app)
+
+    text = asyncio.run(run())
+    assert "local_search" in text
+    assert "download_paper" in text
+
+
+def test_chat_app_tool_flow(tmp_path):
+    llm = FakeLLM(
+        [
+            {"content": None, "tool_calls": [{"id": "c1", "name": "library_status", "arguments": {}}]},
+            {"content": "库里有 1 篇论文。", "tool_calls": []},
+        ]
+    )
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.llm = llm
+        app = ChatApp(llm=llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "库里有什么？"
+            await pilot.press("enter")
+            # 等待响应完成（Input 恢复可用）
+            for _ in range(100):
+                await pilot.pause(0.1)
+                if not app.query_one(Input).disabled:
+                    break
+            return log_text(app)
+
+    text = asyncio.run(run())
+    assert "你：库里有什么？" in text
+    assert "工具 library_status" in text
+    assert "论文 1 篇" in text
+    assert "库里有 1 篇论文。" in text
+
+
+def test_chat_app_clear(tmp_path):
+    async def run():
+        ctx = make_ctx(tmp_path)
+        app = ChatApp(llm=ctx.llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "/help"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            first = log_text(app)
+            inp.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return first, log_text(app)
+
+    first, cleared = asyncio.run(run())
+    assert first != ""
+    assert cleared == ""

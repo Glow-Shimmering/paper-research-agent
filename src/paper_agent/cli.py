@@ -292,6 +292,22 @@ def _print_hits(hits) -> None:
 
 
 @app.command()
+def chat():
+    """TUI 对话模式：模型可自动调用工具（检索/搜索/下载/索引）。"""
+    from .tools import ToolContext
+    from .tui import ChatApp
+
+    config.ensure_data_dir()
+    llm = LLMClient(config.LLM_BASE_URL, config.LLM_API_KEY, config.LLM_MODEL)
+    if not llm.is_configured:
+        typer.echo("错误：未配置 PAPER_LLM_API_KEY，对话模式需要 LLM。", err=True)
+        raise typer.Exit(1)
+    store = Store(config.DB_PATH)
+    embedder = Embedder(config.EMBED_MODEL)
+    ChatApp(llm=llm, ctx=ToolContext(store=store, embedder=embedder, llm=llm)).run()
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port"),

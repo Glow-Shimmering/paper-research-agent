@@ -51,6 +51,34 @@ class LLMClient:
         except Exception as exc:
             raise LLMError(f"LLM 调用失败：{exc}") from exc
 
+    def chat_with_tools(self, system: str, messages: list[dict], tools: list[dict]) -> dict:
+        """带工具调用的一次请求。
+
+        messages 为 OpenAI 格式历史（不含 system）；返回
+        {"content": str|None, "tool_calls": [{"id", "name", "arguments": dict}]}。
+        """
+        if not self.is_configured:
+            raise LLMError("未配置 PAPER_LLM_API_KEY")
+        try:
+            resp = self._get_client().chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": system}, *messages],
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.2,
+            )
+        except Exception as exc:
+            raise LLMError(f"LLM 调用失败：{exc}") from exc
+        message = resp.choices[0].message
+        tool_calls = []
+        for tc in message.tool_calls or []:
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+            tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
+        return {"content": message.content, "tool_calls": tool_calls}
+
 
 _REFINE_SYSTEM = (
     "你是论文元数据提取器。根据论文首页文本提取标题、作者列表和发表年份，"

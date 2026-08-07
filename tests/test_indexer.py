@@ -18,7 +18,7 @@ def test_index_add_and_unchanged(tmp_path):
     papers, chunks = s.stats()
     assert papers == 2 and chunks > 0
     assert s.meta_get("embed_model") == "fake"
-    assert s.meta_get("library_dir") == str(pdf_dir)
+    assert s.meta_get("library_dir") == str(pdf_dir.resolve())
 
     r2 = index_library(s, pdf_dir, FakeEmbedder(), progress=noop_progress)
     assert r2["unchanged"] == 2 and r2["added"] == 0

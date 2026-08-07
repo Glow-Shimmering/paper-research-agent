@@ -28,6 +28,7 @@ py -3.11 -m venv .venv
 | `PAPER_LLM_MODEL` | `deepseek-chat` | 问答模型名 |
 | `PAPER_EMBED_MODEL` | `BAAI/bge-small-zh-v1.5` | 嵌入模型（首次索引联网下载 ~100MB） |
 | `PAPER_DATA_DIR` | `~/.paper-agent` | 数据库目录 |
+| `PAPER_DOWNLOAD_DIR` | （未设） | 对话中下载论文的保存目录（不设则用 `PAPER_DATA_DIR`，再不行用论文库目录） |
 
 > 首次 `paper index` 需联网下载嵌入模型（~100MB，缓存于本地）。国内网络直连 HuggingFace 常失败：在 `.env` 中设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_DISABLE_XET=1`（镜像不支持 Xet 存储，缺一不可）。
 

@@ -37,7 +37,9 @@ def test_single_turn_no_tools(tmp_path):
     llm = FakeLLM([{"content": "你好！", "tool_calls": []}])
     ctx = make_ctx(tmp_path)
     messages, logs = chat_turn(llm, [{"role": "user", "content": "hi"}], ctx)
-    assert messages[-1] == {"role": "assistant", "content": "你好！", "tool_calls": []}
+    # OpenAI API 要求：无工具调用时省略 tool_calls（空数组会 400）
+    assert messages[-1] == {"role": "assistant", "content": "你好！"}
+    assert "tool_calls" not in messages[-1]
     assert [l.role for l in logs] == ["assistant"]
     assert len(llm.calls) == 1
 

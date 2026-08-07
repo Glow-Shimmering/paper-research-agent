@@ -41,20 +41,18 @@ def chat_turn(llm, messages: list[dict], ctx: ToolContext) -> tuple[list[dict], 
         content = resp["content"]
         tool_calls = resp["tool_calls"]
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": content,
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": _json_dumps(tc["arguments"])},
-                    }
-                    for tc in tool_calls
-                ],
-            }
-        )
+        # OpenAI API 要求：无工具调用时 assistant 消息必须省略 tool_calls（空数组会 400）
+        assistant_msg: dict = {"role": "assistant", "content": content}
+        if tool_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": _json_dumps(tc["arguments"])},
+                }
+                for tc in tool_calls
+            ]
+        messages.append(assistant_msg)
         logs.append(TurnLog(role="assistant", content=content or ""))
 
         if not tool_calls:

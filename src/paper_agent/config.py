@@ -5,6 +5,7 @@
 """
 import os
 from pathlib import Path
+from typing import Optional
 
 from dotenv import dotenv_values
 
@@ -20,6 +21,18 @@ LLM_BASE_URL = os.getenv("PAPER_LLM_BASE_URL", "https://api.deepseek.com")
 LLM_API_KEY = os.getenv("PAPER_LLM_API_KEY", "")
 LLM_MODEL = os.getenv("PAPER_LLM_MODEL", "deepseek-chat")
 EMBED_MODEL = os.getenv("PAPER_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
+
+
+def download_dir_override() -> Optional[Path]:
+    """下载论文的显式目录：PAPER_DOWNLOAD_DIR > PAPER_DATA_DIR；都未显式设置返回 None。
+
+    仅接受显式设置（env 中存在即生效），避免默认值目录被误用作下载目标。
+    """
+    for key in ("PAPER_DOWNLOAD_DIR", "PAPER_DATA_DIR"):
+        raw = os.getenv(key)
+        if raw:
+            return Path(raw).resolve()
+    return None
 
 
 def ensure_data_dir() -> Path:

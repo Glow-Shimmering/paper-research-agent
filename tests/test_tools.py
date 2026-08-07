@@ -107,16 +107,46 @@ def test_download_paper(monkeypatch, tmp_path):
         "paper_agent.indexer.index_library",
         lambda store, d, embedder, **kw: {"added": 1, "updated": 0, "unchanged": 0, "failed": 0},
     )
+    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
     ctx = make_ctx(tmp_path, library_dir=tmp_path / "lib")
     (tmp_path / "lib").mkdir()
     out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
     assert "已下载并索引" in out and "2402.11651" in out
+    assert (tmp_path / "lib" / "2402.11651.pdf").exists()
 
 
-def test_download_paper_no_library(tmp_path):
+def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
+    """显式配置目录优先于论文库目录。"""
+    from paper_agent import download as dl_mod
+    from paper_agent.tools import ToolContext
+
+    override = tmp_path / "override"
+    pdf_bytes = b"%PDF-1.7 fake " * 50
+
+    def fake_download(url, target_dir, timeout=60):
+        target = target_dir / "2402.11651.pdf"
+        target.write_bytes(pdf_bytes)
+        return target
+
+    monkeypatch.setattr(dl_mod, "download_pdf", fake_download)
+    monkeypatch.setattr(
+        "paper_agent.indexer.index_library",
+        lambda store, d, embedder, **kw: {"added": 1, "updated": 0, "unchanged": 0, "failed": 0},
+    )
+    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: override)
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    ctx = make_ctx(tmp_path, library_dir=lib)
+    out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
+    assert (override / "2402.11651.pdf").exists()
+    assert not (lib / "2402.11651.pdf").exists()
+
+
+def test_download_paper_no_library(monkeypatch, tmp_path):
+    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
     ctx = make_ctx(tmp_path)  # 无 library_dir
     out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
-    assert "尚未建立论文库目录" in out
+    assert "未配置下载目录" in out and "PAPER_DOWNLOAD_DIR" in out
 
 
 def test_list_papers_and_status(tmp_path):

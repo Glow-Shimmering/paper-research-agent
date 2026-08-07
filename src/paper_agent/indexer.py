@@ -129,5 +129,5 @@ def index_library(
                 result["removed"] += 1
 
     store.meta_set("embed_model", embedder.model_name)
-    store.meta_set("library_dir", str(pdf_dir))
+    store.meta_set("library_dir", str(pdf_dir.resolve()))
     return result

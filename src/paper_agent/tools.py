@@ -85,12 +85,18 @@ def _web_search(ctx: ToolContext, query: str, top: int = 5) -> str:
 
 
 def _download_paper(ctx: ToolContext, url: str) -> str:
+    from . import config
     from .download import DownloadError, download_pdf
     from .indexer import index_library
 
-    target_dir = ctx.library_dir()
+    # 下载目录：显式配置（PAPER_DOWNLOAD_DIR / PAPER_DATA_DIR）优先，否则论文库目录
+    target_dir = config.download_dir_override() or ctx.library_dir()
     if target_dir is None:
-        return "尚未建立论文库目录：请先运行 paper index <目录> 或调用 index_papers 工具。"
+        return (
+            "未配置下载目录：请在 .env 设置 PAPER_DOWNLOAD_DIR（或 PAPER_DATA_DIR），"
+            "或先运行 paper index <论文目录> 建立论文库。"
+        )
+    target_dir.mkdir(parents=True, exist_ok=True)
     try:
         path = download_pdf(url, target_dir)
     except DownloadError as exc:
@@ -100,7 +106,7 @@ def _download_paper(ctx: ToolContext, url: str) -> str:
     except Exception as exc:
         return f"已下载到 {path}，但索引失败：{exc}"
     return (
-        f"已下载并索引：{path.name}（新增 {result['added']}，更新 {result['updated']}，"
+        f"已下载并索引：{path}（新增 {result['added']}，更新 {result['updated']}，"
         f"未变化 {result['unchanged']}）"
     )
 

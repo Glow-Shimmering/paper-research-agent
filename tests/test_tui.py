@@ -105,6 +105,65 @@ def test_chat_app_clear(tmp_path):
     assert cleared == ""
 
 
+def test_chat_app_copy_last_answer(tmp_path, monkeypatch):
+    import pyperclip
+
+    copied = []
+    monkeypatch.setattr(pyperclip, "copy", lambda t: copied.append(t))
+    llm = FakeLLM(
+        [
+            {"content": None, "tool_calls": [{"id": "c1", "name": "library_status", "arguments": {}}]},
+            {"content": "库里有 1 篇论文。", "tool_calls": []},
+        ]
+    )
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.llm = llm
+        app = ChatApp(llm=llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "库里有什么？"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.1)
+                if not app.query_one(Input).disabled:
+                    break
+            inp.value = "/copy"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return log_text(app)
+
+    text = asyncio.run(run())
+    assert copied == ["库里有 1 篇论文。"]
+    assert "已复制到剪贴板" in text
+
+
+def test_chat_app_copy_no_answer(tmp_path, monkeypatch):
+    import pyperclip
+
+    copied = []
+    monkeypatch.setattr(pyperclip, "copy", lambda t: copied.append(t))
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        app = ChatApp(llm=ctx.llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "/copy"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return log_text(app)
+
+    text = asyncio.run(run())
+    assert copied == []
+    assert "没有可复制的回答" in text
+
+
 def test_chat_app_export(tmp_path, monkeypatch):
     notes = tmp_path / "notes"
     monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)

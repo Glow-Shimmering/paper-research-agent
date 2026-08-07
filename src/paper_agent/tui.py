@@ -72,15 +72,37 @@ class ChatApp(App):
             return "handled"
         if text == "/export":
             return self._export_chat()
+        if text == "/copy":
+            return self._copy_last_answer()
         if text == "/help":
             self._log(
-                "[yellow]命令：/clear 清空对话，/export 导出对话为文件，/quit 退出。"
+                "[yellow]命令：/clear 清空对话，/copy 复制最后一条回答到剪贴板，/export 导出对话为文件，/quit 退出。"
                 "工具：local_search 本地检索 / web_search arXiv 搜索 / download_paper 下载并索引 / "
                 "index_papers 索引目录 / list_papers 论文列表 / library_status 库状态 / "
                 "save_note 保存笔记 / list_notes 笔记列表[/yellow]"
             )
             return "handled"
         return None
+
+    def _copy_last_answer(self) -> str:
+        """把最近一条 AI 回答复制到 Windows 剪贴板（与终端选择机制无关）。"""
+        content = None
+        for msg in reversed(self._messages):
+            if msg["role"] == "assistant" and msg.get("content"):
+                content = msg["content"]
+                break
+        if not content:
+            self._log("[yellow]没有可复制的回答。[/yellow]")
+            return "handled"
+        try:
+            import pyperclip
+
+            pyperclip.copy(content)
+        except Exception as exc:
+            self._log(f"[red]复制失败：{exc}[/red]")
+            return "handled"
+        self._log("[green]最后一条回答已复制到剪贴板（Ctrl+V 可粘贴）。[/green]")
+        return "handled"
 
     def _export_chat(self) -> str:
         from . import config

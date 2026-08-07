@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-agent"
-version = "0.3.0"
+version = "0.4.0"
 description = "论文整理与检索 Agent：整理本地论文资料库，提供检索与问答能力"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,6 +19,7 @@ dependencies = [
     "openai>=1.30",
     "python-dotenv>=1.0",
     "textual>=0.60",
+    "pyperclip>=1.8",
 ]
 
 [project.optional-dependencies]

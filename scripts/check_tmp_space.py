@@ -16,6 +16,18 @@ TARGETS = [
 ]
 
 
+def _configure_stream_utf8(stream) -> None:
+    """让 Windows CI 也能安全输出中文状态。"""
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        # 捕获流或宿主包装流可能不允许重配置。
+        pass
+
+
 def dir_size_mb(path: Path) -> int:
     if not path.exists():
         return 0
@@ -30,6 +42,8 @@ def dir_size_mb(path: Path) -> int:
 
 
 def main() -> None:
+    _configure_stream_utf8(sys.stdout)
+    _configure_stream_utf8(sys.stderr)
     ok = True
     for target in TARGETS:
         size = dir_size_mb(target)

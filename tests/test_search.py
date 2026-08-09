@@ -1,8 +1,10 @@
 import hashlib
+import threading
 
 import numpy as np
 import pytest
 
+import paper_agent.search as search_module
 from paper_agent.models import Chunk, Paper
 from paper_agent.search import hybrid_search, rrf_fuse
 from paper_agent.store import Store
@@ -54,6 +56,163 @@ def test_empty_library(tmp_path):
     s = Store(tmp_path / "t.db")
     hits = hybrid_search(s, FakeEmbedder(), "随便查查")
     assert hits == []
+
+
+def test_embedding_model_mismatch_fails_before_query_embedding(tmp_path):
+    s, emb = seed_store(tmp_path, {"a.pdf": ["alpha"]})
+    s.meta_set("embed_model", "indexed-model")
+    emb.model_name = "query-model"
+
+    with pytest.raises(RuntimeError, match="索引由嵌入模型"):
+        hybrid_search(s, emb, "alpha")
+    s.close()
+
+
+def test_search_remains_on_one_snapshot_during_reindex(tmp_path):
+    s = Store(tmp_path / "t.db")
+    old_vector = np.zeros(8, dtype=np.float32)
+    old_vector[0] = 1.0
+    pid = s.upsert_paper(
+        make_paper("a.pdf", title="旧标题"),
+        [Chunk(None, 0, 0, 1, "alpha 旧分块", old_vector)],
+    )
+    s.meta_set("embed_model", "fake")
+
+    started = threading.Event()
+    resume = threading.Event()
+
+    class BlockingEmbedder(FakeEmbedder):
+        def embed(self, texts: list[str], batch_size: int = 32) -> np.ndarray:
+            started.set()
+            if not resume.wait(timeout=2):
+                raise AssertionError("等待并发重索引超时")
+            return super().embed(texts, batch_size)
+
+    emb = BlockingEmbedder({"alpha": old_vector})
+    result: list[list] = []
+    errors: list[BaseException] = []
+
+    def run_search():
+        try:
+            result.append(hybrid_search(s, emb, "alpha", top=1))
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run_search)
+    thread.start()
+    try:
+        assert started.wait(timeout=2)
+        new_vector = np.zeros(8, dtype=np.float32)
+        new_vector[1] = 1.0
+        s.upsert_paper(
+            make_paper("a.pdf", title="新标题"),
+            [Chunk(None, pid, 0, 1, "完全不同的新分块", new_vector)],
+        )
+    finally:
+        resume.set()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert result and result[0][0].text == "alpha 旧分块"
+    assert result[0][0].title == "旧标题"
+    s.close()
+
+
+def test_corpus_cache_reuses_bm25_at_same_revision(tmp_path, monkeypatch):
+    s, emb = seed_store(tmp_path, {"a.pdf": ["alpha 第一块", "beta 第二块"]})
+    build_calls = 0
+    original_build = search_module.Bm25Index.build
+
+    def counting_build(self, chunks):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(self, chunks)
+
+    monkeypatch.setattr(search_module.Bm25Index, "build", counting_build)
+    hybrid_search(s, emb, "alpha")
+    hybrid_search(s, emb, "beta")
+
+    assert build_calls == 1
+    s.close()
+
+
+def test_corpus_cache_refreshes_when_revision_changes(tmp_path, monkeypatch):
+    s, emb = seed_store(tmp_path, {"a.pdf": ["alpha 旧分块"]})
+    build_calls = 0
+    original_build = search_module.Bm25Index.build
+
+    def counting_build(self, chunks):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(self, chunks)
+
+    monkeypatch.setattr(search_module.Bm25Index, "build", counting_build)
+    first = hybrid_search(s, emb, "alpha", top=1)
+
+    new_vector = np.zeros(8, dtype=np.float32)
+    new_vector[0] = 1.0
+    s.replace_chunks(1, [Chunk(None, 1, 0, 1, "alpha 新分块", new_vector)])
+    emb.vecs["alpha"] = new_vector
+    second = hybrid_search(s, emb, "alpha", top=1)
+
+    assert build_calls == 2
+    assert sum(key[0] == s.db_identity for key in search_module._CORPUS_CACHE) == 1
+    assert first[0].text == "alpha 旧分块"
+    assert second[0].text == "alpha 新分块"
+    s.close()
+
+
+def test_corpus_cache_build_is_single_flight_per_revision(tmp_path, monkeypatch):
+    s, emb = seed_store(tmp_path, {"a.pdf": ["alpha"]})
+    original_snapshot = s.search_snapshot
+    original_build = search_module._build_cached_corpus
+    snapshot_count = 0
+    build_calls = 0
+    counter_lock = threading.Lock()
+    both_snapshots = threading.Event()
+
+    def counting_snapshot():
+        nonlocal snapshot_count
+        snapshot = original_snapshot()
+        with counter_lock:
+            snapshot_count += 1
+            if snapshot_count == 2:
+                both_snapshots.set()
+        return snapshot
+
+    def blocking_build(snapshot):
+        nonlocal build_calls
+        with counter_lock:
+            build_calls += 1
+        assert both_snapshots.wait(timeout=2)
+        return original_build(snapshot)
+
+    monkeypatch.setattr(s, "search_snapshot", counting_snapshot)
+    monkeypatch.setattr(search_module, "_build_cached_corpus", blocking_build)
+    barrier = threading.Barrier(3)
+    results = []
+    errors = []
+
+    def run_search():
+        try:
+            barrier.wait(timeout=2)
+            results.append(hybrid_search(s, emb, "alpha"))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_search) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=2)
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(results) == 2
+    assert build_calls == 1
+    s.close()
 
 
 def test_bm25_exact_word_hit(tmp_path):

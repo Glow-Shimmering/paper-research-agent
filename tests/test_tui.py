@@ -36,6 +36,7 @@ def log_text(app) -> str:
 def test_chat_app_help_command(tmp_path):
     async def run():
         ctx = make_ctx(tmp_path)
+        ctx.pending_action = ("save_note", {"filename": "stale.md", "content": "stale"})
         app = ChatApp(llm=ctx.llm, ctx=ctx)
         async with app.run_test() as pilot:
             inp = app.query_one(Input)
@@ -98,11 +99,58 @@ def test_chat_app_clear(tmp_path):
             inp.value = "/clear"
             await pilot.press("enter")
             await pilot.pause(0.2)
-            return first, log_text(app)
+            return first, log_text(app), ctx.pending_action
 
-    first, cleared = asyncio.run(run())
+    first, cleared, pending = asyncio.run(run())
     assert first != ""
     assert cleared == ""
+    assert pending is None
+
+
+def test_chat_app_confirm_executes_pending_exact_action(tmp_path, monkeypatch):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.pending_action = ("save_note", {"filename": "confirmed.md", "content": "ok"})
+        app = ChatApp(llm=ctx.llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "/confirm"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if not app.query_one(Input).disabled:
+                    break
+            return log_text(app), ctx.pending_action
+
+    text, pending = asyncio.run(run())
+    assert pending is None
+    assert (notes / "confirmed.md").read_text(encoding="utf-8") == "ok"
+    assert "已确认工具 save_note" in text
+
+
+def test_chat_app_blocks_new_question_while_action_is_pending(tmp_path):
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.pending_action = ("save_note", {"filename": "pending.md", "content": "x"})
+        app = ChatApp(llm=ctx.llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "换一个操作"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return log_text(app), app._messages, ctx.pending_action
+
+    text, messages, pending = asyncio.run(run())
+    assert "请先输入 /confirm 或 /cancel" in text
+    assert messages == []
+    assert pending is not None
 
 
 def test_chat_app_copy_last_answer(tmp_path, monkeypatch):

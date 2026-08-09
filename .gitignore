@@ -10,6 +10,7 @@ __pycache__/
 .venv/
 .DS_Store
 *.log
+*.pdf.part
 coverage/
 sample_papers/
 .pytest-tmp/

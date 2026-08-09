@@ -4,6 +4,7 @@
 实现里尽量复用现有模块（search / websearch / indexer / download / store）。
 """
 import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -18,6 +19,8 @@ class ToolContext:
     store: Any
     embedder: Any
     llm: Any
+    require_confirmation: bool = True
+    pending_action: Optional[tuple[str, dict]] = None
 
     def library_dir(self) -> Optional[Path]:
         raw = self.store.meta_get("library_dir")
@@ -84,13 +87,21 @@ def _web_search(ctx: ToolContext, query: str, top: int = 5) -> str:
     )
 
 
-def _download_paper(ctx: ToolContext, url: str) -> str:
+def _download_paper(
+    ctx: ToolContext,
+    url: str,
+    _confirmed_target_dir: Optional[str] = None,
+) -> str:
     from . import config
     from .download import DownloadError, download_pdf
-    from .indexer import index_library
+    from .indexer import index_pdf
 
     # 下载目录：显式配置（PAPER_DOWNLOAD_DIR / PAPER_DATA_DIR）优先，否则论文库目录
-    target_dir = config.download_dir_override() or ctx.library_dir()
+    target_dir = (
+        Path(_confirmed_target_dir).expanduser().resolve()
+        if _confirmed_target_dir
+        else config.download_dir_override() or ctx.library_dir()
+    )
     if target_dir is None:
         return (
             "未配置下载目录：请在 .env 设置 PAPER_DOWNLOAD_DIR（或 PAPER_DATA_DIR），"
@@ -102,9 +113,17 @@ def _download_paper(ctx: ToolContext, url: str) -> str:
     except DownloadError as exc:
         return f"下载失败：{exc}"
     try:
-        result = index_library(ctx.store, target_dir, ctx.embedder, progress=lambda msg: None)
+        result = index_pdf(
+            ctx.store,
+            path,
+            ctx.embedder,
+            set_library_dir_if_missing=True,
+            progress=lambda msg: None,
+        )
     except Exception as exc:
         return f"已下载到 {path}，但索引失败：{exc}"
+    if result["failed"]:
+        return f"已下载到 {path}，但索引失败；原有索引未清理。"
     return (
         f"已下载并索引：{path}（新增 {result['added']}，更新 {result['updated']}，"
         f"未变化 {result['unchanged']}）"
@@ -112,11 +131,21 @@ def _download_paper(ctx: ToolContext, url: str) -> str:
 
 
 def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> str:
-    from .indexer import index_library
+    from .indexer import index_library, validate_pdf_directory
 
-    target = Path(dir) if dir else Path(ctx.store.meta_get("library_dir") or ".")
-    if not target.is_dir():
-        return f"目录不存在：{target}"
+    library_root = ctx.library_dir()
+    if library_root is None:
+        return "尚未建立论文库；请先在终端运行 paper index <论文目录>。"
+    target = Path(dir) if dir else library_root
+    try:
+        target = validate_pdf_directory(target)
+    except RuntimeError as exc:
+        return str(exc)
+    if target != library_root.resolve():
+        return (
+            f"拒绝通过 Agent 切换论文库目录：{target}。"
+            "如需切换，请在终端显式运行 paper index <目录> --force。"
+        )
     try:
         result = index_library(ctx.store, target, ctx.embedder, progress=lambda msg: None)
     except Exception as exc:
@@ -323,17 +352,78 @@ _REGISTRY: dict[str, tuple[dict, Callable]] = {
 TOOLS: list[dict] = [schema for schema, _ in _REGISTRY.values()]
 
 SCHEMA_NAMES = set(_REGISTRY.keys())
+MUTATING_TOOLS = frozenset({"download_paper", "index_papers", "save_note"})
+EXTERNAL_TOOLS = frozenset({"web_search"})
+CONFIRMATION_TOOLS = MUTATING_TOOLS | EXTERNAL_TOOLS
 
 
-def execute_tool(name: str, args: dict, ctx: ToolContext) -> str:
+def _pending_args(name: str, args: dict, ctx: ToolContext) -> dict:
+    """冻结会影响落盘位置的派生参数，使确认内容与实际执行绑定。"""
+    pending = dict(args)
+    if name == "download_paper":
+        from . import config
+
+        target_dir = config.download_dir_override() or ctx.library_dir()
+        pending = {"url": pending.get("url")}
+        if target_dir is not None:
+            pending["_confirmed_target_dir"] = str(target_dir.expanduser().resolve())
+    return pending
+
+
+def pending_action_description(ctx: ToolContext, *, include_local_paths: bool = True) -> str:
+    """返回可安全完整核对的待确认摘要；大文本使用长度、预览和哈希绑定。"""
+    if ctx.pending_action is None:
+        return "没有待确认的工具操作。"
+    name, args = ctx.pending_action
+    display: dict[str, Any] = {}
+    for key, value in args.items():
+        if key.startswith("_confirmed_") and not include_local_paths:
+            display[key] = "（仅在本地确认界面显示）"
+            continue
+        if isinstance(value, str) and len(value) > 500:
+            display[key] = {
+                "chars": len(value),
+                "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+                "preview": value[:200],
+            }
+        else:
+            display[key] = value
+    return f"{name}：{json.dumps(display, ensure_ascii=False)}"
+
+
+def execute_tool(name: str, args: dict, ctx: ToolContext, *, confirmed: bool = False) -> str:
     """执行工具，返回给 LLM 的文本结果。未知工具返回错误说明。"""
     entry = _REGISTRY.get(name)
     if entry is None:
         return f"未知工具：{name}。可用工具：{', '.join(sorted(SCHEMA_NAMES))}"
+    normalized_args = dict(args or {})
+    if name in CONFIRMATION_TOOLS and ctx.require_confirmation and not confirmed:
+        if ctx.pending_action is None:
+            ctx.pending_action = (name, _pending_args(name, normalized_args, ctx))
+        details = pending_action_description(ctx, include_local_paths=False)
+        return (
+            f"操作尚未执行。需要用户确认外部/写入操作：{details}。"
+            "请停止继续调用需确认的操作，并请用户在 TUI 输入 /confirm；输入 /cancel 可取消。"
+        )
     impl = entry[1]
     try:
-        return impl(ctx, **(args or {}))
+        return impl(ctx, **normalized_args)
     except TypeError as exc:
         return f"工具参数错误：{exc}"
     except Exception as exc:
         return f"工具执行失败：{exc}"
+
+
+def confirm_pending_action(ctx: ToolContext) -> tuple[str, str]:
+    """执行用户已确认的精确待办参数，返回 (tool_name, result)。"""
+    if ctx.pending_action is None:
+        return "", "没有待确认的工具操作。"
+    name, args = ctx.pending_action
+    ctx.pending_action = None
+    return name, execute_tool(name, args, ctx, confirmed=True)
+
+
+def cancel_pending_action(ctx: ToolContext) -> bool:
+    had_pending = ctx.pending_action is not None
+    ctx.pending_action = None
+    return had_pending

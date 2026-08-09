@@ -14,8 +14,20 @@ document.querySelectorAll(".tab").forEach(function (btn) {
   });
 });
 
-async function api(url, opts) {
-  const resp = await fetch(url, opts);
+async function api(url, opts, retried) {
+  const request = Object.assign({}, opts || {});
+  const headers = new Headers(request.headers || {});
+  const apiKey = sessionStorage.getItem("paper-agent-api-key");
+  if (apiKey) headers.set("X-Paper-Agent-Key", apiKey);
+  request.headers = headers;
+  const resp = await fetch(url, request);
+  if (resp.status === 401 && !retried) {
+    const entered = window.prompt("此 Paper Agent 服务需要 API key：");
+    if (entered) {
+      sessionStorage.setItem("paper-agent-api-key", entered);
+      return api(url, opts, true);
+    }
+  }
   if (!resp.ok) {
     let msg = "请求失败（" + resp.status + "）";
     try { msg = (await resp.json()).detail || msg; } catch (e) { /* 保持默认 */ }

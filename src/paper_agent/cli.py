@@ -1,19 +1,60 @@
 """paper 命令行入口。"""
 import json as _json
+import sys
 from pathlib import Path
 
 import typer
 
+from . import __version__
 from . import config
 from .answer import ask as answer_ask
 from .embeddings import Embedder
-from .indexer import index_library
+from .indexer import index_library, validate_pdf_directory
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
 from .store import Store
 from .websearch import WebSearchError, search_papers
 
+
+def _configure_stream_utf8(stream) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        # 测试捕获流或宿主包装流可能不允许重配置；这些流通常已支持 Unicode。
+        pass
+
+
+def _configure_stdio_utf8() -> None:
+    """避免 Windows 的 GBK 标准流在输出论文 Unicode 文本时崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        _configure_stream_utf8(stream)
+
+
+_configure_stdio_utf8()
+
 app = typer.Typer(help="论文整理与检索助手：索引本地 PDF 论文库，提供检索与问答。")
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"paper-agent {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="显示版本并退出",
+    ),
+):
+    """论文整理与检索助手。"""
 
 
 def _todo(cmd: str) -> None:
@@ -24,11 +65,16 @@ def _todo(cmd: str) -> None:
 @app.command()
 def index(
     dir: str = typer.Argument(".", help="PDF 论文目录（默认当前目录）"),
-    force: bool = typer.Option(False, "--force", help="嵌入模型变更时强制全量重建"),
+    force: bool = typer.Option(False, "--force", help="显式全量替换索引（切换目录或嵌入模型时使用）"),
     refine: bool = typer.Option(False, "--refine", help="用 LLM 提炼元数据（需要配置 API key）"),
     no_prune: bool = typer.Option(False, "--no-prune", help="不删除库中已消失文件的条目"),
 ):
     """扫描目录中的 PDF 并建立索引。"""
+    try:
+        pdf_dir = validate_pdf_directory(Path(dir))
+    except RuntimeError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(1)
     config.ensure_data_dir()
     store = Store(config.DB_PATH)
     embedder = Embedder(config.EMBED_MODEL)
@@ -36,7 +82,7 @@ def index(
     try:
         result = index_library(
             store,
-            Path(dir),
+            pdf_dir,
             embedder,
             refine=refine,
             llm=llm,
@@ -311,12 +357,30 @@ def chat():
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port"),
+    ssl_certfile: str = typer.Option(None, "--ssl-certfile", help="HTTPS 证书文件"),
+    ssl_keyfile: str = typer.Option(None, "--ssl-keyfile", help="HTTPS 私钥文件"),
+    allow_insecure_http: bool = typer.Option(
+        False,
+        "--allow-insecure-http",
+        help="仅可信网络：明确允许非本机明文 HTTP",
+    ),
 ):
     """启动本地 Web 界面。"""
     from .webapp import serve as serve_web
 
-    typer.echo(f"Web 界面：http://{host}:{port}（Ctrl+C 退出）")
-    serve_web(host=host, port=port)
+    scheme = "https" if ssl_certfile and ssl_keyfile else "http"
+    typer.echo(f"Web 界面：{scheme}://{host}:{port}（Ctrl+C 退出）")
+    try:
+        serve_web(
+            host=host,
+            port=port,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            allow_insecure_remote=allow_insecure_http,
+        )
+    except RuntimeError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

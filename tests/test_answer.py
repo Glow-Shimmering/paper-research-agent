@@ -155,6 +155,20 @@ def test_ask_llm_error_raised(tmp_path):
         ask(s, emb, RaisingLLM(), "问题")
 
 
+def test_ask_rejects_invalid_citation(tmp_path):
+    s, emb = seed(tmp_path, ["内容。"])
+    with pytest.raises(LLMError, match="不存在的来源引用"):
+        ask(s, emb, FakeLLM("结论 [2]"), "问题")
+
+
+def test_ask_rejects_missing_citation_but_allows_abstention(tmp_path):
+    s, emb = seed(tmp_path, ["内容。"])
+    with pytest.raises(LLMError, match="缺少.*来源引用"):
+        ask(s, emb, FakeLLM("这是没有引用的结论"), "问题")
+    answer, *_ = ask(s, emb, FakeLLM("根据已有资料无法回答。"), "问题")
+    assert answer == "根据已有资料无法回答。"
+
+
 def test_refine_metadata_valid():
     llm = FakeLLM('{"title": "标题", "authors": ["甲", "乙"], "year": 2021}')
     assert refine_metadata(llm, "x.pdf", "text") == {"title": "标题", "authors": ["甲", "乙"], "year": 2021}

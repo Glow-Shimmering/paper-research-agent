@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from paper_agent.store import Store
@@ -25,7 +27,12 @@ def make_ctx(tmp_path, library_dir=None):
     )
     if library_dir is not None:
         s.meta_set("library_dir", str(library_dir))
-    return ToolContext(store=s, embedder=FakeEmbedder(), llm=FakeLLM())
+    return ToolContext(
+        store=s,
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(),
+        require_confirmation=False,
+    )
 
 
 def test_tools_schema_complete():
@@ -92,6 +99,24 @@ def test_web_search_failure(monkeypatch, tmp_path):
     assert "联网检索失败" in out
 
 
+def test_web_search_requires_confirmation_before_external_request(monkeypatch, tmp_path):
+    from paper_agent import websearch as ws_mod
+    from paper_agent.tools import confirm_pending_action
+
+    calls = []
+    monkeypatch.setattr(ws_mod, "search_papers", lambda q, limit: calls.append(q) or [])
+    ctx = make_ctx(tmp_path)
+    ctx.require_confirmation = True
+
+    result = execute_tool("web_search", {"query": "private-title", "top": 3}, ctx)
+
+    assert "尚未执行" in result
+    assert calls == []
+    name, _ = confirm_pending_action(ctx)
+    assert name == "web_search"
+    assert calls == ["private-title"]
+
+
 def test_download_paper(monkeypatch, tmp_path):
     from paper_agent import download as dl_mod
     from paper_agent.tools import ToolContext
@@ -104,16 +129,21 @@ def test_download_paper(monkeypatch, tmp_path):
         return target
 
     monkeypatch.setattr(dl_mod, "download_pdf", fake_download)
-    monkeypatch.setattr(
-        "paper_agent.indexer.index_library",
-        lambda store, d, embedder, **kw: {"added": 1, "updated": 0, "unchanged": 0, "failed": 0},
-    )
+    indexed = []
+
+    def fake_index_pdf(store, path, embedder, **kwargs):
+        indexed.append((path, kwargs))
+        return {"added": 1, "updated": 0, "unchanged": 0, "failed": 0}
+
+    monkeypatch.setattr("paper_agent.indexer.index_pdf", fake_index_pdf)
     monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
     ctx = make_ctx(tmp_path, library_dir=tmp_path / "lib")
     (tmp_path / "lib").mkdir()
     out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
     assert "已下载并索引" in out and "2402.11651" in out
     assert (tmp_path / "lib" / "2402.11651.pdf").exists()
+    assert indexed[0][0] == tmp_path / "lib" / "2402.11651.pdf"
+    assert indexed[0][1]["set_library_dir_if_missing"] is True
 
 
 def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
@@ -131,8 +161,10 @@ def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dl_mod, "download_pdf", fake_download)
     monkeypatch.setattr(
-        "paper_agent.indexer.index_library",
-        lambda store, d, embedder, **kw: {"added": 1, "updated": 0, "unchanged": 0, "failed": 0},
+        "paper_agent.indexer.index_pdf",
+        lambda store, path, embedder, **kw: {
+            "added": 1, "updated": 0, "unchanged": 0, "failed": 0
+        },
     )
     monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: override)
     lib = tmp_path / "lib"
@@ -148,6 +180,28 @@ def test_download_paper_no_library(monkeypatch, tmp_path):
     ctx = make_ctx(tmp_path)  # 无 library_dir
     out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
     assert "未配置下载目录" in out and "PAPER_DOWNLOAD_DIR" in out
+
+
+def test_download_confirmation_freezes_and_displays_target_directory(monkeypatch, tmp_path):
+    from paper_agent.tools import pending_action_description
+
+    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
+    library = tmp_path / "lib"
+    library.mkdir()
+    ctx = make_ctx(tmp_path, library_dir=library)
+    ctx.require_confirmation = True
+
+    result = execute_tool(
+        "download_paper",
+        {"url": "https://arxiv.org/abs/2402.11651"},
+        ctx,
+    )
+
+    assert str(library.resolve()) not in result
+    displayed = json.loads(pending_action_description(ctx).split("：", 1)[1])
+    assert displayed["_confirmed_target_dir"] == str(library.resolve())
+    assert ctx.pending_action is not None
+    assert ctx.pending_action[1]["_confirmed_target_dir"] == str(library.resolve())
 
 
 def test_list_papers_and_status(tmp_path):
@@ -227,3 +281,24 @@ def test_tool_error_returns_text(tmp_path):
     ctx = make_ctx(tmp_path)
     out = execute_tool("local_search", {"query": 123}, ctx)  # 参数类型错误
     assert "工具" in out and ("参数" in out or "失败" in out)
+
+
+def test_mutating_tool_requires_exact_user_confirmation(monkeypatch, tmp_path):
+    from paper_agent.tools import confirm_pending_action
+
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path)
+    ctx.require_confirmation = True
+
+    out = execute_tool("save_note", {"filename": "safe.md", "content": "v1"}, ctx)
+    assert "尚未执行" in out and "/confirm" in out
+    assert not (notes / "safe.md").exists()
+    assert ctx.pending_action == ("save_note", {"filename": "safe.md", "content": "v1"})
+
+    # 后续模型写操作不能替换用户将要确认的精确参数。
+    execute_tool("save_note", {"filename": "changed.md", "content": "evil"}, ctx)
+    name, result = confirm_pending_action(ctx)
+    assert name == "save_note" and "已保存" in result
+    assert (notes / "safe.md").read_text(encoding="utf-8") == "v1"
+    assert not (notes / "changed.md").exists()

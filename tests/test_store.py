@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from paper_agent.models import Chunk, Paper
-from paper_agent.store import Store
+from paper_agent.store import RevisionConflictError, Store
 
 
 def make_paper(path="a.pdf", **kw):
@@ -92,6 +92,135 @@ def test_all_chunks_alignment(tmp_path):
     s.close()
 
 
+def test_search_snapshot_is_aligned_and_self_contained(tmp_path):
+    s = Store(tmp_path / "t.db")
+    pid = s.upsert_paper(make_paper(title="快照论文", authors=["甲", "乙"]))
+    s.replace_chunks(
+        pid,
+        [
+            Chunk(None, pid, 0, 1, "第一块", np.array([1, 0], dtype=np.float32)),
+            Chunk(None, pid, 1, 2, "无向量"),
+            Chunk(None, pid, 2, 3, "第三块", np.array([0, 1], dtype=np.float32)),
+        ],
+    )
+    s.meta_set("embed_model", "m1")
+
+    snapshot = s.search_snapshot()
+
+    assert [item.text for item in snapshot.items] == ["第一块", "第三块"]
+    assert [item.chunk_id for item in snapshot.items] == [1, 3]
+    assert snapshot.items[0].title == "快照论文"
+    assert snapshot.items[0].authors == ("甲", "乙")
+    np.testing.assert_array_equal(
+        snapshot.embeddings,
+        np.array([[1, 0], [0, 1]], dtype=np.float32),
+    )
+    assert snapshot.embed_model == "m1"
+    assert snapshot.revision == s.revision
+    assert not snapshot.embeddings.flags.writeable
+    s.close()
+
+
+def test_revision_invalidates_search_visible_mutations(tmp_path):
+    s = Store(tmp_path / "t.db")
+    assert s.revision == 0
+
+    pid = s.upsert_paper(make_paper())
+    assert s.revision == 1
+    s.replace_chunks(pid, [Chunk(None, pid, 0, 1, "x", np.ones(2, dtype=np.float32))])
+    assert s.revision == 2
+
+    s.meta_set("library_dir", "elsewhere")
+    assert s.revision == 2
+    s.meta_set("embed_model", "m1")
+    assert s.revision == 3
+    s.meta_set("embed_model", "m1")
+    assert s.revision == 3
+
+    s.delete_paper(pid)
+    assert s.revision == 4
+    s.delete_paper(pid)
+    assert s.revision == 4
+    s.close()
+
+
+def test_db_identity_is_stable_across_store_instances(tmp_path):
+    db_path = tmp_path / "t.db"
+    first = Store(db_path)
+    identity = first.db_identity
+    assert first.db_path == db_path.resolve()
+    first.close()
+
+    second = Store(db_path)
+    assert second.db_identity == identity
+    assert second.search_cache_key() == (identity, 0, None)
+    second.close()
+
+
+def test_incremental_commit_rejects_stale_revision_across_store_instances(tmp_path):
+    db_path = tmp_path / "t.db"
+    first = Store(db_path)
+    second = Store(db_path)
+    first_revision = first.index_state().revision
+    stale_revision = second.index_state().revision
+
+    first.commit_index_update(
+        [
+            (
+                make_paper("first.pdf", title="first"),
+                [Chunk(None, 0, 0, 1, "first", np.ones(2, dtype=np.float32))],
+            )
+        ],
+        [],
+        embed_model="m1",
+        library_dir="root-a",
+        expected_revision=first_revision,
+    )
+
+    with pytest.raises(RevisionConflictError, match="已被其他进程修改.*重试"):
+        second.commit_index_update(
+            [
+                (
+                    make_paper("second.pdf", title="second"),
+                    [Chunk(None, 0, 0, 1, "second", np.ones(2, dtype=np.float32))],
+                )
+            ],
+            [],
+            embed_model="m2",
+            library_dir="root-b",
+            expected_revision=stale_revision,
+        )
+
+    assert first.stats() == (1, 1)
+    assert first.paper_by_path("second.pdf") is None
+    assert first.meta_get("embed_model") == "m1"
+    assert first.meta_get("library_dir") == "root-a"
+    first.close()
+    second.close()
+
+
+def test_replace_library_rejects_stale_revision(tmp_path):
+    db_path = tmp_path / "t.db"
+    first = Store(db_path)
+    second = Store(db_path)
+    stale_revision = second.index_state().revision
+    first.upsert_paper(make_paper("kept.pdf", title="kept"))
+
+    with pytest.raises(RevisionConflictError, match="已被其他进程修改"):
+        second.replace_library(
+            [(make_paper("replacement.pdf"), [])],
+            embed_model="m2",
+            library_dir="replacement-root",
+            expected_revision=stale_revision,
+        )
+
+    assert first.stats() == (1, 0)
+    assert first.paper_by_path("kept.pdf") is not None
+    assert first.paper_by_path("replacement.pdf") is None
+    first.close()
+    second.close()
+
+
 def test_list_filter(tmp_path):
     s = Store(tmp_path / "t.db")
     s.upsert_paper(make_paper("a.pdf", title="注意力机制研究", authors=["张三"]))
@@ -102,6 +231,26 @@ def test_list_filter(tmp_path):
     assert total == 1 and papers[0].path == "b.pdf"
     total, papers = s.list_papers(None, 1, 0)
     assert total == 2 and len(papers) == 1
+    s.close()
+
+
+def test_list_papers_with_chunk_counts(tmp_path):
+    s = Store(tmp_path / "t.db")
+    first = s.upsert_paper(make_paper("a.pdf", title="Alpha"))
+    s.replace_chunks(
+        first,
+        [
+            Chunk(None, first, 0, 1, "one", np.ones(2, dtype=np.float32)),
+            Chunk(None, first, 1, 1, "two", np.ones(2, dtype=np.float32)),
+        ],
+    )
+    s.upsert_paper(make_paper("b.pdf", title="Beta"))
+
+    total, rows = s.list_papers_with_chunk_counts(None, 10, 0)
+    assert total == 2
+    assert [(paper.title, count) for paper, count in rows] == [("Alpha", 2), ("Beta", 0)]
+    total, rows = s.list_papers_with_chunk_counts("Beta", 10, 0)
+    assert total == 1 and rows[0][1] == 0
     s.close()
 
 

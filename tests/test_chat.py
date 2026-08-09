@@ -1,6 +1,6 @@
 import pytest
 
-from paper_agent.chat import MAX_TOOL_ROUNDS, chat_turn
+from paper_agent.chat import MAX_TOOL_ROUNDS, _history_for_request, chat_turn
 from paper_agent.models import Chunk
 from paper_agent.store import Store
 from paper_agent.tools import ToolContext
@@ -110,3 +110,20 @@ def test_local_search_tool_in_dialogue(tmp_path):
     ctx = make_ctx(tmp_path)
     messages, logs = chat_turn(llm, [{"role": "user", "content": "查一下"}], ctx)
     assert "注意力机制研究" in messages[2]["content"]
+
+
+def test_history_trim_keeps_complete_recent_turns():
+    messages = [
+        {"role": "user", "content": "old" * 20},
+        {"role": "assistant", "content": "old answer" * 20},
+        {"role": "user", "content": "new question"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "x", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ]
+    trimmed = _history_for_request(messages, max_chars=200)
+    assert trimmed[0] == {"role": "user", "content": "new question"}
+    assert [m["role"] for m in trimmed] == ["user", "assistant", "tool"]

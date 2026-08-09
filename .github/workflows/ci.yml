@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: "3.11"
+            constrained: true
+          - os: ubuntu-latest
+            python: "3.11"
+            constrained: true
+          - os: ubuntu-latest
+            python: "3.10"
+            constrained: false
+          - os: ubuntu-latest
+            python: "3.12"
+            constrained: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip
+      - name: Install verified dependency set
+        if: matrix.constrained
+        run: python -m pip install -c requirements-dev.lock -e ".[dev]"
+      - name: Install compatible dependency set
+        if: matrix.constrained == false
+        run: python -m pip install -e ".[dev]"
+      - name: Check dependency consistency
+        run: python -m pip check
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Check test temporary space
+        if: always()
+        run: python scripts/check_tmp_space.py
+      - name: Build wheel
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: python -m pip wheel . --no-deps --wheel-dir dist
+      - name: Verify isolated wheel runtime
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: python scripts/check_wheel.py dist

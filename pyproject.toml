@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-agent"
-version = "0.4.0"
+dynamic = ["version"]
 description = "论文整理与检索 Agent：整理本地论文资料库，提供检索与问答能力"
 requires-python = ">=3.10"
 dependencies = [
@@ -30,6 +30,12 @@ paper = "paper_agent.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "paper_agent.__version__"}
+
+[tool.setuptools.package-data]
+paper_agent = ["web/*.html", "web/*.css", "web/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,7 +3,7 @@ import threading
 
 import numpy as np
 
-_CACHE: dict[str, tuple[object, int]] = {}
+_CACHE: dict[str, tuple[object, int, threading.RLock]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -12,6 +12,7 @@ class Embedder:
         self.model_name = model_name
         self._model = None
         self._dim: int | None = None
+        self._inference_lock: threading.RLock | None = None
 
     @property
     def dim(self) -> int:
@@ -27,7 +28,7 @@ class Embedder:
             if self._model is not None:
                 return
             if self.model_name in _CACHE:
-                self._model, self._dim = _CACHE[self.model_name]
+                self._model, self._dim, self._inference_lock = _CACHE[self.model_name]
                 return
             try:
                 from fastembed import TextEmbedding
@@ -39,13 +40,16 @@ class Embedder:
                     "检查网络，或设置 HF_ENDPOINT=https://hf-mirror.com 后重试"
                 ) from exc
             dim = model.embedding_size
-            _CACHE[self.model_name] = (model, dim)
-            self._model, self._dim = model, dim
+            inference_lock = threading.RLock()
+            _CACHE[self.model_name] = (model, dim, inference_lock)
+            self._model, self._dim, self._inference_lock = model, dim, inference_lock
 
     def embed(self, texts: list[str], batch_size: int = 32) -> np.ndarray:
         """返回 (N, D) float32 矩阵。"""
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
         self._load()
-        vectors = list(self._model.embed(texts, batch_size=batch_size))  # type: ignore[union-attr]
+        assert self._inference_lock is not None
+        with self._inference_lock:
+            vectors = list(self._model.embed(texts, batch_size=batch_size))  # type: ignore[union-attr]
         return np.stack(vectors)

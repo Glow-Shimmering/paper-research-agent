@@ -39,3 +39,27 @@ class SearchHit:
     page: int
     text: str
     score: float
+
+
+@dataclass(frozen=True)
+class SearchCorpusItem:
+    """检索快照中的一行；位置与 ``SearchSnapshot.embeddings`` 严格对齐。"""
+
+    chunk_id: int
+    paper_id: int
+    title: str
+    authors: tuple[str, ...]
+    year: Optional[int]
+    path: str
+    page: int
+    text: str
+
+
+@dataclass(frozen=True)
+class SearchSnapshot:
+    """一次数据库读快照得到的完整检索语料。"""
+
+    items: tuple[SearchCorpusItem, ...]
+    embeddings: np.ndarray = field(repr=False, compare=False)
+    embed_model: Optional[str] = None
+    revision: int = 0

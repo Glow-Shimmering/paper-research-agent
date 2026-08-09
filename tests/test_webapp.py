@@ -1,11 +1,30 @@
-from fastapi.testclient import TestClient
+from importlib import resources
 
+import pytest
+from fastapi.testclient import TestClient as FastAPITestClient
+
+from paper_agent import config
 from paper_agent.llm import LLMError
 from paper_agent.models import Chunk
 from paper_agent.store import Store
-from paper_agent.webapp import create_app
+from paper_agent.webapp import create_app, serve
 
 from helpers import FakeEmbedder, make_paper
+
+
+def TestClient(app, **kwargs):
+    """Web tests use the same loopback origin as the production default."""
+    kwargs.setdefault("base_url", "http://127.0.0.1")
+    return FastAPITestClient(app, **kwargs)
+
+
+def test_web_assets_are_installed_package_resources():
+    web_dir = resources.files("paper_agent").joinpath("web")
+
+    assert web_dir.is_dir()
+    assert web_dir.joinpath("index.html").is_file()
+    assert web_dir.joinpath("style.css").is_file()
+    assert web_dir.joinpath("app.js").is_file()
 
 
 class FakeLLM:
@@ -42,6 +61,85 @@ def test_status(tmp_path):
     assert data["papers"] == 0 and data["chunks"] == 0
     assert data["llm_configured"] is True
     assert data["embed_model"] == "fake"
+
+
+def test_api_key_protects_api_but_not_static_page(tmp_path):
+    s = make_env(tmp_path)
+    client = TestClient(
+        create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM(), api_key="secret")
+    )
+    assert client.get("/").status_code == 200
+    assert client.get("/api/status").status_code == 401
+    assert client.get("/api/status", headers={"X-Paper-Agent-Key": "wrong"}).status_code == 401
+    ok = client.get("/api/status", headers={"X-Paper-Agent-Key": "secret"})
+    assert ok.status_code == 200
+
+
+def test_unkeyed_api_rejects_non_loopback_host(tmp_path):
+    s = make_env(tmp_path)
+    client = FastAPITestClient(
+        create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM(), api_key=""),
+        base_url="http://paper-agent.example",
+    )
+
+    assert client.get("/").status_code == 200
+    assert client.get("/api/status").status_code == 403
+
+
+def test_api_rejects_cross_origin_browser_request(tmp_path):
+    s = make_env(tmp_path)
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+
+    response = client.post(
+        "/api/reindex",
+        headers={"Origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_api_parameter_and_body_limits(tmp_path):
+    s = make_env(tmp_path)
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM(), api_key=""))
+    assert client.get("/api/search", params={"q": "x", "top": 101}).status_code == 422
+    assert client.get("/api/papers", params={"limit": 0}).status_code == 422
+    response = client.post("/api/ask", json={"question": "x" * 20_001})
+    assert response.status_code == 413
+
+
+def test_api_streaming_body_limit_without_content_length(tmp_path):
+    s = make_env(tmp_path)
+    client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))
+
+    def oversized_chunks():
+        yield b'{' + b'x' * 600_000
+        yield b'x' * 600_000 + b'}'
+
+    response = client.post(
+        "/api/ask",
+        content=oversized_chunks(),
+        headers={"Content-Type": "application/json", "Transfer-Encoding": "chunked"},
+    )
+
+    assert response.status_code == 413
+
+
+def test_remote_bind_requires_api_key(monkeypatch):
+    monkeypatch.setattr(config, "WEB_API_KEY", "")
+    with pytest.raises(RuntimeError, match="拒绝无鉴权"):
+        serve(host="0.0.0.0", port=8000)
+
+
+def test_remote_bind_rejects_plaintext_without_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(config, "WEB_API_KEY", "secret")
+
+    with pytest.raises(RuntimeError, match="明文 HTTP"):
+        serve(host="0.0.0.0", port=8000)
+
+
+def test_https_options_must_be_paired():
+    with pytest.raises(RuntimeError, match="同时提供"):
+        serve(host="127.0.0.1", port=8000, ssl_certfile="cert.pem")
 
 
 def test_papers_list(tmp_path):

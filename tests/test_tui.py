@@ -133,6 +133,117 @@ def test_chat_app_confirm_executes_pending_exact_action(tmp_path, monkeypatch):
     assert "已确认工具 save_note" in text
 
 
+def test_chat_app_confirm_resumes_original_agent_run(tmp_path, monkeypatch):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    llm = FakeLLM(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "save-1",
+                        "name": "save_note",
+                        "arguments": {"filename": "agent.md", "content": "evidence"},
+                    }
+                ],
+            },
+            {"content": "笔记已保存。", "tool_calls": []},
+        ]
+    )
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.llm = llm
+        app = ChatApp(llm=llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "保存一条笔记"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if not inp.disabled and ctx.pending_action is not None:
+                    break
+            run_id = ctx.pending_action.run_id
+            inp.value = "/confirm"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if not inp.disabled:
+                    break
+            record = ctx.store.get_agent_run(run_id)
+            return log_text(app), app._messages, ctx.pending_action, record
+
+    text, messages, pending, record = asyncio.run(run())
+    assert pending is None
+    assert (notes / "agent.md").read_text(encoding="utf-8") == "evidence"
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert messages[2]["tool_call_id"] == "save-1"
+    assert messages[-1]["content"] == "笔记已保存。"
+    assert record.status == "succeeded"
+    assert "已确认工具 save_note" in text
+
+
+def test_chat_app_cancel_closes_tool_protocol_and_run(tmp_path, monkeypatch):
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    llm = FakeLLM(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "save-cancel",
+                        "name": "save_note",
+                        "arguments": {"filename": "cancelled.md", "content": "no"},
+                    }
+                ],
+            }
+        ]
+    )
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.llm = llm
+        app = ChatApp(llm=llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "保存后取消"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if not inp.disabled and ctx.pending_action is not None:
+                    break
+            run_id = ctx.pending_action.run_id
+            inp.value = "/cancel"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            return (
+                log_text(app),
+                app._messages,
+                ctx.pending_action,
+                ctx.store.get_agent_run(run_id),
+            )
+
+    text, messages, pending, record = asyncio.run(run())
+    assert pending is None
+    assert not (notes / "cancelled.md").exists()
+    assert messages[-1]["role"] == "tool"
+    assert messages[-1]["tool_call_id"] == "save-cancel"
+    assert "操作未执行" in messages[-1]["content"]
+    assert record.status == "cancelled"
+    assert "已取消待确认" in text
+
+
 def test_chat_app_blocks_new_question_while_action_is_pending(tmp_path):
     async def run():
         ctx = make_ctx(tmp_path)

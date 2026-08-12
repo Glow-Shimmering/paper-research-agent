@@ -1,9 +1,20 @@
+import hashlib
 import json
 
 import pytest
 
 from paper_agent.store import Store
-from paper_agent.tools import TOOLS, ToolContext, execute_tool
+from paper_agent.tool_protocol import ToolEffect, ToolResult, ToolSpec, ToolValidationError
+from paper_agent.tools import (
+    CONFIRMATION_TOOLS,
+    EXTERNAL_TOOLS,
+    MUTATING_TOOLS,
+    TOOLS,
+    ToolContext,
+    execute_tool,
+    execute_tool_result,
+    register_tool,
+)
 
 from helpers import FakeEmbedder, make_paper
 
@@ -42,11 +53,35 @@ def test_tools_schema_complete():
     assert set(names) == SCHEMA_NAMES == {
         "local_search", "web_search", "download_paper", "index_papers", "list_papers",
         "library_status", "save_note", "list_notes",
+        "search_within_paper", "get_paper_outline", "read_pages",
+        "read_chunk_context", "pin_evidence", "get_evidence", "list_evidence",
     }
     for t in TOOLS:
         assert t["type"] == "function"
         assert "description" in t["function"]
         assert "parameters" in t["function"]
+        assert t["function"]["parameters"]["additionalProperties"] is False
+
+
+def test_tool_effect_sets_are_derived_from_specs():
+    import paper_agent.tools as tools_module
+
+    assert all(
+        spec.effects
+        and all(isinstance(effect, ToolEffect) for effect in spec.effects)
+        and spec.timeout_seconds > 0
+        and isinstance(spec.idempotent, bool)
+        for spec in tools_module._REGISTRY.values()
+    )
+    assert MUTATING_TOOLS == {
+        "download_paper", "index_papers", "save_note", "pin_evidence"
+    }
+    assert EXTERNAL_TOOLS == {"web_search", "download_paper"}
+    assert CONFIRMATION_TOOLS == MUTATING_TOOLS | EXTERNAL_TOOLS
+    assert tools_module._REGISTRY["save_note"].idempotent is False
+    assert tools_module._REGISTRY["download_paper"].timeout_seconds == 180.0
+    structured = ToolResult.success(data={"ok": True})
+    assert structured.to_model_text() == structured.to_text()
 
 
 def test_local_search(tmp_path):
@@ -95,8 +130,10 @@ def test_web_search_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ws_mod, "search_papers", boom)
     ctx = make_ctx(tmp_path)
-    out = execute_tool("web_search", {"query": "x"}, ctx)
-    assert "联网检索失败" in out
+    result = execute_tool_result("web_search", {"query": "x"}, ctx)
+    assert result.ok is False and result.code == "web_search_failed"
+    assert result.retryable is True
+    assert "联网检索失败" in result.to_model_text()
 
 
 def test_web_search_requires_confirmation_before_external_request(monkeypatch, tmp_path):
@@ -178,8 +215,21 @@ def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
 def test_download_paper_no_library(monkeypatch, tmp_path):
     monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
     ctx = make_ctx(tmp_path)  # 无 library_dir
-    out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
-    assert "未配置下载目录" in out and "PAPER_DOWNLOAD_DIR" in out
+    result = execute_tool_result(
+        "download_paper",
+        {"url": "https://arxiv.org/abs/2402.11651"},
+        ctx,
+    )
+    assert result.ok is False and result.code == "download_dir_missing"
+    assert "未配置下载目录" in result.message and "PAPER_DOWNLOAD_DIR" in result.message
+
+
+def test_index_missing_library_is_a_structured_failure(tmp_path):
+    ctx = make_ctx(tmp_path)
+    result = execute_tool_result("index_papers", {}, ctx)
+    assert result.ok is False
+    assert result.code == "library_missing"
+    assert "尚未建立论文库" in result.message
 
 
 def test_download_confirmation_freezes_and_displays_target_directory(monkeypatch, tmp_path):
@@ -302,3 +352,294 @@ def test_mutating_tool_requires_exact_user_confirmation(monkeypatch, tmp_path):
     assert name == "save_note" and "已保存" in result
     assert (notes / "safe.md").read_text(encoding="utf-8") == "v1"
     assert not (notes / "changed.md").exists()
+
+
+def test_unclassified_tools_are_rejected_by_registration_and_execution(
+    monkeypatch,
+    tmp_path,
+):
+    import paper_agent.tools as tools_module
+
+    with pytest.raises(ToolValidationError, match="effects 不能为空"):
+        ToolSpec(
+            name="unclassified",
+            description="bad",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda ctx: "bad",
+            effects=frozenset(),
+        )
+    with pytest.raises(ToolValidationError, match="ToolSpec"):
+        register_tool(object())  # type: ignore[arg-type]
+
+    monkeypatch.setitem(tools_module._REGISTRY, "rogue", object())
+    result = execute_tool_result("rogue", {}, make_ctx(tmp_path))
+    assert result.ok is False
+    assert result.code == "tool_unclassified"
+
+
+@pytest.mark.parametrize(
+    "args, expected",
+    [
+        ({}, "缺少必填字段"),
+        ({"query": 123}, "必须是 string"),
+        ({"query": "alpha", "top": 0}, "不能小于 1"),
+        ({"query": "alpha", "extra": True}, "未知字段"),
+    ],
+)
+def test_tool_arguments_are_strictly_validated(tmp_path, args, expected):
+    result = execute_tool_result("local_search", args, make_ctx(tmp_path))
+    assert result.ok is False
+    assert result.code == "invalid_arguments"
+    assert expected in result.message
+
+
+def test_confirmation_ticket_binds_action_parameters_and_runtime_ids(monkeypatch, tmp_path):
+    from paper_agent.tools import confirm_pending_action
+
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path)
+    ctx.require_confirmation = True
+
+    pending_result = execute_tool_result(
+        "save_note",
+        {"filename": "bound.md", "content": "original"},
+        ctx,
+        tool_call_id="call_7",
+        run_id="run_3",
+    )
+    assert pending_result.requires_confirmation is True
+    assert pending_result.action_id and pending_result.digest
+    assert ctx.pending_action is not None
+
+    refused = execute_tool_result(
+        "save_note",
+        {"filename": "changed.md", "content": "evil"},
+        ctx,
+        confirmed=True,
+        action_id="act_wrong",
+        digest=pending_result.digest,
+    )
+    assert refused.code == "confirmation_mismatch"
+    assert not notes.exists()
+
+    name, text = confirm_pending_action(ctx)
+    assert name == "save_note" and "已保存" in text
+    assert (notes / "bound.md").read_text(encoding="utf-8") == "original"
+    confirmed = ctx.last_confirmed_action
+    assert confirmed is not None
+    assert confirmed.action_id == pending_result.action_id
+    assert confirmed.digest == pending_result.digest
+    assert confirmed.tool_call_id == "call_7"
+    assert confirmed.run_id == "run_3"
+    assert isinstance(confirmed.result, ToolResult)
+
+
+def test_confirmation_detects_pending_parameter_tampering(monkeypatch, tmp_path):
+    from paper_agent.tool_protocol import PendingAction
+    from paper_agent.tools import confirm_pending_action
+
+    notes = tmp_path / "notes"
+    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path)
+    ctx.require_confirmation = True
+    execute_tool("save_note", {"filename": "safe.md", "content": "v1"}, ctx)
+    assert isinstance(ctx.pending_action, PendingAction)
+
+    ctx.pending_action.args["content"] = "tampered"
+    _, result = confirm_pending_action(ctx)
+    assert "已发生变化" in result
+    assert not notes.exists()
+    assert ctx.pending_action is None
+
+
+def test_local_and_deep_reading_tools_return_stable_evidence_ids(
+    monkeypatch,
+    tmp_path,
+):
+    ctx = make_ctx(tmp_path)
+    paper = ctx.store.paper_by_path("a.pdf")
+    assert paper is not None and paper.id is not None
+    chunks = ctx.store.paper_chunks(paper.id)
+    first_chunk_id = chunks[0].id
+    assert first_chunk_id is not None
+
+    local = execute_tool_result("local_search", {"query": "注意力机制"}, ctx)
+    assert local.ok and local.evidence_ids
+    assert isinstance(local.data[0]["chunk_id"], int)
+    assert local.data[0]["paper_id"] == paper.id
+    assert local.data[0]["evidence_id"].startswith("ev_")
+
+    within = execute_tool_result(
+        "search_within_paper",
+        {"paper_id": paper.id, "query": "Transformer", "top": 2},
+        ctx,
+    )
+    assert within.ok and within.data["paper"]["id"] == paper.id
+    assert within.data["hits"][0]["evidence_id"].startswith("ev_")
+
+    outline = execute_tool_result("get_paper_outline", {"paper_id": paper.id}, ctx)
+    assert outline.ok and outline.data["pages"]
+    assert outline.data["pages"][0]["evidence_ids"][0].startswith("ev_")
+
+    context = execute_tool_result(
+        "read_chunk_context",
+        {"chunk_id": first_chunk_id, "before": 0, "after": 1},
+        ctx,
+    )
+    assert context.ok and context.data["center_chunk_id"] == first_chunk_id
+    assert context.data["chunks"][0]["evidence_id"].startswith("ev_")
+
+    pinned = execute_tool_result(
+        "pin_evidence",
+        {"chunk_id": first_chunk_id, "annotation": "关键定义"},
+        ctx,
+    )
+    assert pinned.ok and pinned.evidence_ids[0].startswith("ev_")
+    evidence_id = pinned.evidence_ids[0]
+    assert pinned.data["annotation"] == "关键定义"
+
+    fetched = execute_tool_result(
+        "get_evidence", {"evidence_id": evidence_id}, ctx
+    )
+    listed = execute_tool_result("list_evidence", {"limit": 5}, ctx)
+    assert fetched.ok and fetched.data["evidence_id"] == evidence_id
+    assert listed.ok and listed.data[0]["evidence_id"] == evidence_id
+
+    monkeypatch.setattr(
+        "paper_agent.pdf.extract_pdf",
+        lambda path: (["第一页正文", "第二页正文"], {}),
+    )
+    monkeypatch.setattr("paper_agent.tools._sha256_file", lambda path: paper.sha256)
+    pages = execute_tool_result(
+        "read_pages",
+        {"paper_id": paper.id, "start_page": 1, "end_page": 2},
+        ctx,
+    )
+    assert pages.ok
+    assert [page["text"] for page in pages.data["pages"]] == ["第一页正文", "第二页正文"]
+    assert pages.data["pages"][0]["evidence_ids"]
+
+
+def test_stale_evidence_is_returned_for_audit_but_not_citable(tmp_path):
+    from paper_agent.models import Chunk
+
+    ctx = make_ctx(tmp_path)
+    paper = ctx.store.paper_by_path("a.pdf")
+    assert paper is not None and paper.id is not None
+    chunk = ctx.store.paper_chunks(paper.id)[0]
+    assert chunk.id is not None
+    evidence_id = execute_tool_result("pin_evidence", {"chunk_id": chunk.id}, ctx).evidence_ids[0]
+
+    ctx.store.replace_chunks(
+        paper.id,
+        [Chunk(None, paper.id, 0, 1, "已修改的内容"), Chunk(None, paper.id, 1, 2, "Transformer 使用自注意力。")],
+    )
+
+    fetched = execute_tool_result("get_evidence", {"evidence_id": evidence_id}, ctx)
+    listed = execute_tool_result("list_evidence", {"limit": 5}, ctx)
+
+    assert fetched.ok and fetched.data["stale"] is True
+    assert fetched.evidence_ids == ()
+    assert "已过期" in fetched.message
+    assert listed.ok and listed.data[0]["stale"] is True
+    assert listed.evidence_ids == ()
+    assert "已过期" in listed.message
+
+
+def test_read_pages_rejects_pdf_changed_after_indexing(tmp_path, monkeypatch):
+    from paper_agent.models import Chunk
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"indexed-version")
+    indexed_sha256 = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    ctx = ToolContext(
+        store=Store(tmp_path / "changed.db"),
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(),
+        require_confirmation=False,
+    )
+    paper_id = ctx.store.upsert_paper(
+        make_paper(str(pdf_path), sha256=indexed_sha256, title="哈希校验论文")
+    )
+    ctx.store.replace_chunks(paper_id, [Chunk(None, paper_id, 0, 1, "索引文本")])
+    pdf_path.write_bytes(b"changed-version")
+    monkeypatch.setattr(
+        "paper_agent.pdf.extract_pdf",
+        lambda path: pytest.fail("哈希不匹配时不应读取 PDF"),
+    )
+
+    result = execute_tool_result(
+        "read_pages", {"paper_id": paper_id, "start_page": 1}, ctx
+    )
+
+    assert result.ok is False
+    assert result.code == "paper_source_changed"
+    assert "重新运行 paper index" in result.message
+
+
+def test_evidence_id_schema_is_a_stable_string_contract(tmp_path):
+    invalid = execute_tool_result("get_evidence", {"evidence_id": "1"}, make_ctx(tmp_path))
+    assert invalid.code == "invalid_arguments"
+    schema = next(
+        tool["function"]["parameters"]
+        for tool in TOOLS
+        if tool["function"]["name"] == "get_evidence"
+    )
+    assert schema["properties"]["evidence_id"] == {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 128,
+    }
+
+
+def test_outline_and_page_reading_have_hard_output_limits(tmp_path):
+    class LargePaperStore:
+        def paper_by_id(self, paper_id):
+            return {
+                "id": paper_id,
+                "title": "超长论文",
+                "authors": [],
+                "path": "large.pdf",
+                "page_count": 150,
+            }
+
+        def paper_chunks(self, paper_id):
+            return [
+                {
+                    "id": page,
+                    "paper_id": paper_id,
+                    "seq": page - 1,
+                    "page": page,
+                    "text": "x" * 2_000,
+                }
+                for page in range(1, 151)
+            ]
+
+        def evidence_from_chunk(self, chunk_id):
+            return {"id": f"ev_{chunk_id}"}
+
+    ctx = ToolContext(
+        store=LargePaperStore(),
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(),
+        require_confirmation=False,
+    )
+    outline = execute_tool_result(
+        "get_paper_outline",
+        {"paper_id": 1, "preview_chars": 1_000},
+        ctx,
+    )
+    assert outline.ok
+    assert outline.data["truncated"] is True
+    assert len(outline.data["pages"]) <= 100
+    assert sum(len(page["preview"]) for page in outline.data["pages"]) <= 24_000
+
+    real_ctx = make_ctx(tmp_path)
+    too_many_pages = execute_tool_result(
+        "read_pages",
+        {"paper_id": 1, "start_page": 1, "end_page": 51},
+        real_ctx,
+    )
+    assert too_many_pages.ok is False
+    assert too_many_pages.code == "page_range_too_large"

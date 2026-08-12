@@ -1,7 +1,7 @@
 """LLM 客户端（OpenAI 兼容）与元数据提炼。"""
 import json
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from openai import OpenAI
 
@@ -17,6 +17,7 @@ class LLMClient:
         self.model = model
         self._client: Optional[OpenAI] = None
         self._timeout = timeout
+        self.last_response_metadata: dict[str, Any] = {}
 
     @property
     def is_configured(self) -> bool:
@@ -31,6 +32,14 @@ class LLMClient:
 
     def chat(self, system: str, user: str) -> str:
         """生成式对话。失败抛 LLMError 带原因。"""
+        return self.chat_with_metadata(system, user)["content"]
+
+    def chat_with_metadata(self, system: str, user: str) -> dict[str, Any]:
+        """生成式对话，同时返回可审计的响应元数据。
+
+        ``chat`` 保持原有字符串返回值；需要 usage / finish_reason /
+        response_id 的调用方使用本方法或读取 ``last_response_metadata``。
+        """
         if not self.is_configured:
             raise LLMError("未配置 PAPER_LLM_API_KEY")
         try:
@@ -45,7 +54,9 @@ class LLMClient:
             content = resp.choices[0].message.content
             if content is None:
                 raise LLMError("LLM 返回空内容")
-            return content
+            metadata = _response_metadata(resp)
+            self.last_response_metadata = metadata
+            return {"content": content, "metadata": metadata}
         except LLMError:
             raise
         except Exception as exc:
@@ -55,7 +66,8 @@ class LLMClient:
         """带工具调用的一次请求。
 
         messages 为 OpenAI 格式历史（不含 system）；返回
-        {"content": str|None, "tool_calls": [{"id", "name", "arguments": dict}]}。
+        {"content": str|None, "tool_calls": [{"id", "name", "arguments": dict}],
+        "metadata": {"usage", "finish_reason", "response_id"}}。
         """
         if not self.is_configured:
             raise LLMError("未配置 PAPER_LLM_API_KEY")
@@ -70,6 +82,8 @@ class LLMClient:
         except Exception as exc:
             raise LLMError(f"LLM 调用失败：{exc}") from exc
         message = resp.choices[0].message
+        metadata = _response_metadata(resp)
+        self.last_response_metadata = metadata
         tool_calls = []
         for tc in message.tool_calls or []:
             try:
@@ -77,7 +91,38 @@ class LLMClient:
             except json.JSONDecodeError:
                 args = {}
             tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
-        return {"content": message.content, "tool_calls": tool_calls}
+        return {"content": message.content, "tool_calls": tool_calls, "metadata": metadata}
+
+
+def _response_metadata(response: Any) -> dict[str, Any]:
+    """从 OpenAI 兼容响应提炼 JSON 可序列化元数据。"""
+    choices = getattr(response, "choices", None) or []
+    finish_reason = getattr(choices[0], "finish_reason", None) if choices else None
+    usage_obj = getattr(response, "usage", None)
+    usage: dict[str, Any] = {}
+    if usage_obj is not None:
+        if hasattr(usage_obj, "model_dump"):
+            dumped = usage_obj.model_dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                usage = dumped
+        elif isinstance(usage_obj, dict):
+            usage = dict(usage_obj)
+        else:
+            for key in (
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "input_tokens",
+                "output_tokens",
+            ):
+                value = getattr(usage_obj, key, None)
+                if value is not None:
+                    usage[key] = value
+    return {
+        "usage": usage,
+        "finish_reason": finish_reason,
+        "response_id": getattr(response, "id", None),
+    }
 
 
 _REFINE_SYSTEM = (

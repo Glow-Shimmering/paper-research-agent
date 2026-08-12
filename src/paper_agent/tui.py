@@ -7,7 +7,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Input, RichLog
 
 from . import __version__
-from .chat import chat_turn
+from .chat import cancel_pending_run, chat_turn
 from .tools import (
     ToolContext,
     cancel_pending_action,
@@ -50,7 +50,7 @@ class ChatApp(App):
     def on_mount(self) -> None:
         self._log(
             "[cyan]论文助手对话模式：模型可自动调用工具"
-            "（本地检索 / arXiv 搜索 / 下载 / 索引 / 列表 / 状态）。输入 /help 查看命令。[/cyan]"
+            "（检索 / 深读 / 固定证据 / arXiv / 下载 / 索引）。输入 /help 查看命令。[/cyan]"
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -70,14 +70,23 @@ class ChatApp(App):
         self._messages.append({"role": "user", "content": text})
         self._log(f"[bold blue]你：{escape(text)}[/bold blue]\n")
         self.query_one(Input).disabled = True
-        self.run_worker(self._respond(), group="chat")
+        self.run_worker(
+            self._respond(objective=text, create_run=True),
+            group="chat",
+        )
 
     def _handle_command(self, text: str):
         if text in ("/quit", "/exit"):
             return "quit"
         if text == "/clear":
+            try:
+                self._cancel_for_ui(log_result=False)
+            except Exception as exc:
+                self._log(f"[red]取消当前 Agent run 失败：{escape(str(exc))}[/red]")
+                return "handled"
             self._messages.clear()
-            cancel_pending_action(self._ctx)
+            if hasattr(self._ctx, "last_confirmed_action"):
+                self._ctx.last_confirmed_action = None
             self.query_one("#log", RichLog).clear()
             return "handled"
         if text == "/export":
@@ -92,10 +101,11 @@ class ChatApp(App):
             self.run_worker(self._confirm_pending(), group="chat")
             return "handled"
         if text == "/cancel":
-            if cancel_pending_action(self._ctx):
-                self._log("[yellow]已取消待确认的工具操作。[/yellow]")
-            else:
-                self._log("[yellow]没有待确认的工具操作。[/yellow]")
+            try:
+                if not self._cancel_for_ui(log_result=True):
+                    self._log("[yellow]没有待确认的工具操作。[/yellow]")
+            except Exception as exc:
+                self._log(f"[red]取消当前 Agent run 失败：{escape(str(exc))}[/red]")
             return "handled"
         if text == "/help":
             self._log(
@@ -103,23 +113,44 @@ class ChatApp(App):
                 "/confirm 执行待确认写操作，/cancel 取消待确认操作，/quit 退出。"
                 "工具：local_search 本地检索 / web_search arXiv 搜索 / download_paper 下载并索引 / "
                 "index_papers 索引目录 / list_papers 论文列表 / library_status 库状态 / "
+                "search_within_paper 单篇检索 / get_paper_outline 分页概览 / "
+                "read_pages 阅读页面 / read_chunk_context 阅读上下文 / "
+                "pin_evidence 固定证据 / get_evidence、list_evidence 读取证据 / "
                 "save_note 保存笔记 / list_notes 笔记列表[/yellow]"
             )
             return "handled"
         return None
 
     async def _confirm_pending(self) -> None:
+        pending = self._ctx.pending_action
         try:
             name, result = await asyncio.to_thread(confirm_pending_action, self._ctx)
             if name:
                 self._log(f"[dim]→ 已确认工具 {escape(name)}[/dim]")
-                self._log(f"[green]{escape(result)}[/green]")
-                self._messages.append(
-                    {
-                        "role": "user",
-                        "content": f"[用户已确认执行工具 {name}；执行结果：{result}]",
-                    }
+                confirmed = getattr(self._ctx, "last_confirmed_action", None)
+                tool_call_id = getattr(confirmed, "tool_call_id", None) or getattr(
+                    pending, "tool_call_id", None
                 )
+                run_id = getattr(confirmed, "run_id", None) or getattr(
+                    pending, "run_id", None
+                )
+                structured_result = getattr(confirmed, "result", None)
+                if tool_call_id:
+                    new_messages, logs = await asyncio.to_thread(
+                        chat_turn,
+                        self._llm,
+                        self._messages,
+                        self._ctx,
+                        run_id=run_id,
+                        confirmed_tool_result=structured_result or result,
+                        confirmed_tool_call_id=tool_call_id,
+                    )
+                    self._messages = new_messages
+                    self._render_logs(logs)
+                else:
+                    # 兼容手工注入的旧式 pending tuple；真实 Agent pending 总会
+                    # 带原始 tool_call_id，并走上面的协议化续跑路径。
+                    self._log(f"[green]{escape(result)}[/green]")
             else:
                 self._log(f"[yellow]{result}[/yellow]")
         except Exception as exc:
@@ -180,16 +211,37 @@ class ChatApp(App):
         inp.disabled = False
         inp.focus()
 
-    async def _respond(self) -> None:
+    async def _respond(
+        self,
+        *,
+        objective: str | None = None,
+        create_run: bool = False,
+    ) -> None:
         try:
             new_messages, logs = await asyncio.to_thread(
-                chat_turn, self._llm, self._messages, self._ctx
+                chat_turn,
+                self._llm,
+                self._messages,
+                self._ctx,
+                objective=objective,
+                create_run=create_run,
             )
         except Exception as exc:
             self._log(f"[red]调用失败：{escape(str(exc))}[/red]")
             self._respond_done()
             return
         self._messages = new_messages
+        self._render_logs(logs)
+        if self._ctx.pending_action is not None:
+            self._log(
+                "[yellow]待确认："
+                f"{escape(pending_action_description(self._ctx))}。"
+                "输入 /confirm 执行，或 /cancel 取消。[/yellow]"
+            )
+        self._respond_done()
+
+    def _render_logs(self, logs) -> None:
+        """把 Agent 事件的用户可见部分统一渲染到 TUI。"""
         for entry in logs:
             if entry.role == "assistant" and entry.content:
                 self._log(f"[green]{escape(entry.content)}[/green]\n")
@@ -204,13 +256,34 @@ class ChatApp(App):
                 self._log(f"[dim]  ↳ {escape(head)}[/dim]")
             elif entry.role == "error":
                 self._log(f"[red]{escape(entry.content)}[/red]")
-        if self._ctx.pending_action is not None:
-            self._log(
-                "[yellow]待确认："
-                f"{escape(pending_action_description(self._ctx))}。"
-                "输入 /confirm 执行，或 /cancel 取消。[/yellow]"
+            elif entry.role == "verification" and entry.content:
+                self._log(f"[yellow]{escape(entry.content)}[/yellow]")
+
+    def _cancel_for_ui(self, *, log_result: bool) -> bool:
+        """取消 pending；新协议优先，旧式测试/会话安全降级。"""
+        pending = self._ctx.pending_action
+        if pending is None:
+            return False
+        try:
+            self._messages, logs = cancel_pending_run(
+                self._messages,
+                self._ctx,
+                pending=pending,
             )
-        self._respond_done()
+        except Exception:
+            if getattr(pending, "tool_call_id", None) or getattr(
+                pending, "run_id", None
+            ):
+                # 新协议的 pending 若取消失败，必须保留现场以便重试，不能把
+                # 持久 run 留在 awaiting_confirmation 却清掉本地票据。
+                raise
+            cancel_pending_action(self._ctx)
+            logs = []
+        if log_result:
+            if logs:
+                self._render_logs(logs)
+            self._log("[yellow]已取消待确认的工具操作。[/yellow]")
+        return True
 
     def _log(self, text: str) -> None:
         self.query_one("#log", RichLog).write(text)

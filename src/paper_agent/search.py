@@ -1,5 +1,6 @@
 """混合检索：BM25 + 向量余弦，RRF 融合。"""
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import threading
 
@@ -25,6 +26,19 @@ class _CachedCorpus:
 _CORPUS_CACHE: OrderedDict[tuple[str, int, str | None], _CachedCorpus] = OrderedDict()
 _CORPUS_CACHE_LOCK = threading.RLock()
 _CORPUS_BUILD_LOCKS: dict[tuple[str, int, str | None], threading.Lock] = {}
+
+
+def _record_value(record, *names: str, default=None):
+    """读取 Store 返回的 dataclass 或轻量 dict 测试替身。"""
+    if isinstance(record, Mapping):
+        for name in names:
+            if name in record:
+                return record[name]
+        return default
+    for name in names:
+        if hasattr(record, name):
+            return getattr(record, name)
+    return default
 
 
 def _cache_get(key: tuple[str, int, str | None]) -> _CachedCorpus | None:
@@ -171,4 +185,88 @@ def hybrid_search(store, embedder, query: str, top: int = 10, per_paper_cap: int
             score=score,
         )
         for idx, score in ranked
+    ]
+
+
+def search_within_paper(
+    store,
+    embedder,
+    paper_id: int,
+    query: str,
+    top: int = 10,
+) -> list[SearchHit]:
+    """仅在指定论文内执行混合检索，返回可继续深读的真实 chunk id。"""
+    paper = store.paper_by_id(paper_id)
+    if paper is None:
+        return []
+    try:
+        paper_chunks = store.paper_chunks(paper_id, include_embeddings=True)
+    except TypeError:
+        # 兼容实现该合同早期版本的 Store / 测试替身。
+        paper_chunks = store.paper_chunks(paper_id)
+    chunks = [
+        chunk
+        for chunk in paper_chunks
+        if _record_value(chunk, "chunk_id", "id") is not None
+    ]
+    if not chunks:
+        return []
+
+    bm25 = Bm25Index()
+    bm25.build([str(_record_value(chunk, "text", default="")) for chunk in chunks])
+    bm25_hits = bm25.search(query, top_k=_RAW_TOP)
+
+    vector_rows = [
+        (index, _record_value(chunk, "embedding"))
+        for index, chunk in enumerate(chunks)
+        if _record_value(chunk, "embedding") is not None
+    ]
+    vec_hits: list[tuple[int, float]] = []
+    if vector_rows:
+        meta_get = getattr(store, "meta_get", None)
+        stored_model = meta_get("embed_model") if callable(meta_get) else None
+        current_model = getattr(embedder, "model_name", None)
+        if stored_model is not None and stored_model != current_model:
+            raise RuntimeError(
+                f"索引由嵌入模型「{stored_model}」建立，"
+                f"当前查询模型为「{current_model}」。请切换回原模型，或使用 --force 全量重建索引。"
+            )
+        try:
+            matrix = np.vstack(
+                [np.asarray(embedding, dtype=np.float32) for _, embedding in vector_rows]
+            )
+        except ValueError as exc:
+            raise RuntimeError("论文内索引的嵌入维度不一致，请使用 --force 全量重建索引") from exc
+        q_vec = np.asarray(embedder.embed([query])[0], dtype=np.float32)
+        if q_vec.ndim != 1 or q_vec.shape[0] != matrix.shape[1]:
+            actual = q_vec.shape[0] if q_vec.ndim == 1 else tuple(q_vec.shape)
+            raise RuntimeError(
+                f"查询嵌入维度（{actual}）与索引维度（{matrix.shape[1]}）不一致，"
+                "请确认嵌入模型配置，或使用 --force 全量重建索引。"
+            )
+        norms = np.linalg.norm(matrix, axis=1)
+        norms[norms == 0] = 1.0
+        q_norm = q_vec / (np.linalg.norm(q_vec) or 1.0)
+        scores = (matrix / norms[:, None]) @ q_norm
+        ordered = np.argsort(-scores)
+        vec_hits = [
+            (vector_rows[int(row)][0], float(scores[int(row)]))
+            for row in ordered
+            if scores[int(row)] > 0
+        ][:_RAW_TOP]
+
+    ranked = sorted(rrf_fuse(bm25_hits, vec_hits).items(), key=lambda item: item[1], reverse=True)
+    return [
+        SearchHit(
+            chunk_id=int(_record_value(chunks[index], "chunk_id", "id")),
+            paper_id=paper_id,
+            title=str(_record_value(paper, "title", default="")),
+            authors=list(_record_value(paper, "authors", default=[]) or []),
+            year=_record_value(paper, "year"),
+            path=str(_record_value(paper, "path", default="")),
+            page=int(_record_value(chunks[index], "page", default=0)),
+            text=str(_record_value(chunks[index], "text", default="")),
+            score=score,
+        )
+        for index, score in ranked[:top]
     ]

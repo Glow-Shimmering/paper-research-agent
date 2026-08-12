@@ -1,4 +1,5 @@
-"""SQLite 存储层：论文、分块、meta。跨线程安全（Web 线程池 + reindex 线程）。"""
+"""SQLite 存储层：索引、证据与 Agent 运行记录。"""
+import hashlib
 import json
 import sqlite3
 import threading
@@ -6,11 +7,33 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 
-from .models import Chunk, Paper, SearchCorpusItem, SearchHit, SearchSnapshot
+from .models import (
+    AgentEventRecord,
+    AgentRunRecord,
+    Chunk,
+    Evidence,
+    Paper,
+    SearchCorpusItem,
+    SearchHit,
+    SearchSnapshot,
+)
+
+_SCHEMA_VERSION = 2
+_AGENT_RUN_STATUSES = frozenset(
+    {
+        "proposed",
+        "running",
+        "awaiting_confirmation",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "blocked",
+    }
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
@@ -37,11 +60,54 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS evidence (
+    id TEXT PRIMARY KEY,
+    paper_id INTEGER REFERENCES papers(id) ON DELETE SET NULL,
+    chunk_id INTEGER REFERENCES chunks(id) ON DELETE SET NULL,
+    source_hash TEXT NOT NULL,
+    paper_sha256 TEXT NOT NULL,
+    chunk_text_sha256 TEXT NOT NULL,
+    title TEXT NOT NULL,
+    authors TEXT NOT NULL,
+    year INTEGER,
+    path TEXT NOT NULL,
+    page INTEGER NOT NULL,
+    chunk_seq INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    annotation TEXT NOT NULL DEFAULT '',
+    pinned_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_pinned_at ON evidence(pinned_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_evidence_source ON evidence(path, chunk_seq);
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL,
+    plan TEXT,
+    budget TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_run_seq ON agent_events(run_id, seq);
 """
 
 
 class RevisionConflictError(RuntimeError):
     """索引预处理期间数据库已变化；本批写入必须放弃。"""
+
+
+class AgentRunStatusConflictError(RuntimeError):
+    """Agent Run 的 compare-and-swap 状态转换失败。"""
 
 
 @dataclass(frozen=True)
@@ -69,9 +135,19 @@ class Store:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
-            self._conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')"
-            )
+            version_row = self._conn.execute(
+                "SELECT value FROM meta WHERE key='schema_version'"
+            ).fetchone()
+            try:
+                old_version = int(version_row["value"]) if version_row else 0
+            except (TypeError, ValueError):
+                old_version = 0
+            if old_version < _SCHEMA_VERSION:
+                self._conn.execute(
+                    """INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+                       ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                    (str(_SCHEMA_VERSION),),
+                )
             self._conn.execute(
                 "INSERT OR IGNORE INTO meta (key, value) VALUES ('index_revision', '0')"
             )
@@ -206,6 +282,11 @@ class Store:
             row = self._conn.execute("SELECT * FROM papers WHERE id=?", (paper_id,)).fetchone()
         return self._paper_from_row(row) if row else None
 
+    def paper_by_id(self, paper_id: int) -> Optional[Paper]:
+        """按主键取得论文；与 ``paper_by_path`` 组成文档导航接口。"""
+
+        return self.get_paper(paper_id)
+
     def paper_by_path(self, path: str) -> Optional[Paper]:
         with self._lock:
             row = self._conn.execute("SELECT * FROM papers WHERE path=?", (path,)).fetchone()
@@ -309,21 +390,40 @@ class Store:
             rows = self._conn.execute(
                 f"SELECT {cols} FROM chunks WHERE paper_id=? ORDER BY seq", (paper_id,)
             ).fetchall()
-        return [
-            Chunk(
-                id=r["id"],
-                paper_id=r["paper_id"],
-                seq=r["seq"],
-                page=r["page"],
-                text=r["text"],
-                embedding=(
-                    np.frombuffer(r["embedding"], dtype=np.float32) if r["embedding"] is not None else None
-                )
-                if include_embeddings
-                else None,
-            )
-            for r in rows
-        ]
+        return [self._chunk_from_row(row, include_embedding=include_embeddings) for row in rows]
+
+    def paper_chunks(self, paper_id: int, include_embeddings: bool = False) -> list[Chunk]:
+        """返回论文的全部分块，按文档顺序排列。"""
+
+        return self.get_chunks_by_paper(paper_id, include_embeddings=include_embeddings)
+
+    def chunk_context(
+        self,
+        chunk_id: int,
+        before: int = 1,
+        after: int = 1,
+        *,
+        radius: Optional[int] = None,
+    ) -> list[Chunk]:
+        """返回目标分块及其前后文；目标不存在时返回空列表。"""
+
+        if radius is not None:
+            before = after = radius
+        if before < 0 or after < 0:
+            raise ValueError("before、after 和 radius 必须是非负整数")
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT context.id, context.paper_id, context.seq,
+                          context.page, context.text
+                   FROM chunks AS target
+                   JOIN chunks AS context
+                     ON context.paper_id = target.paper_id
+                    AND context.seq BETWEEN target.seq - ? AND target.seq + ?
+                   WHERE target.id=?
+                   ORDER BY context.seq""",
+                (before, after, chunk_id),
+            ).fetchall()
+        return [self._chunk_from_row(row) for row in rows]
 
     def all_embeddings(self) -> tuple[np.ndarray, list[int]]:
         """返回 (N×D float32 矩阵, chunk_id 列表)，按 chunk id 升序。"""
@@ -441,6 +541,307 @@ class Store:
             )
         return hits
 
+    # ---------- evidence ----------
+
+    def evidence_from_chunk(self, chunk_id: int) -> Evidence:
+        """从当前索引分块生成稳定、尚未固定的证据快照。"""
+
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT c.id AS chunk_id, c.paper_id, c.seq, c.page, c.text,
+                          p.path, p.sha256, p.title, p.authors, p.year
+                   FROM chunks c JOIN papers p ON p.id = c.paper_id
+                   WHERE c.id=?""",
+                (chunk_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"分块不存在：{chunk_id}")
+        text_hash = self._text_sha256(row["text"])
+        source_hash = self._evidence_source_hash(
+            row["sha256"], row["seq"], row["page"], text_hash
+        )
+        return Evidence(
+            id=f"ev_{source_hash}",
+            paper_id=row["paper_id"],
+            chunk_id=row["chunk_id"],
+            source_hash=source_hash,
+            paper_sha256=row["sha256"],
+            chunk_text_sha256=text_hash,
+            title=row["title"],
+            authors=tuple(json.loads(row["authors"])),
+            year=row["year"],
+            path=row["path"],
+            page=row["page"],
+            chunk_seq=row["seq"],
+            text=row["text"],
+        )
+
+    def pin_evidence(
+        self,
+        evidence: Evidence | int,
+        annotation: Optional[str] = None,
+    ) -> Evidence:
+        """持久化证据及批注；同一来源重复固定只更新快照和批注。"""
+
+        if isinstance(evidence, int):
+            evidence = self.evidence_from_chunk(evidence)
+        if not isinstance(evidence, Evidence):
+            raise TypeError("evidence 必须是 Evidence 或 chunk id")
+        text_hash = self._text_sha256(evidence.text)
+        source_hash = self._evidence_source_hash(
+            evidence.paper_sha256,
+            evidence.chunk_seq,
+            evidence.page,
+            text_hash,
+        )
+        if (
+            evidence.id != f"ev_{source_hash}"
+            or evidence.source_hash != source_hash
+            or evidence.chunk_text_sha256 != text_hash
+        ):
+            raise ValueError("Evidence 的 id/hash 与来源快照不一致")
+        annotation_value = evidence.annotation if annotation is None else str(annotation)
+        pinned_at = evidence.pinned_at or now_iso()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO evidence (
+                       id, paper_id, chunk_id, source_hash, paper_sha256,
+                       chunk_text_sha256, title, authors, year, path, page,
+                       chunk_seq, text, annotation, pinned_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       paper_id=excluded.paper_id,
+                       chunk_id=excluded.chunk_id,
+                       source_hash=excluded.source_hash,
+                       paper_sha256=excluded.paper_sha256,
+                       chunk_text_sha256=excluded.chunk_text_sha256,
+                       title=excluded.title,
+                       authors=excluded.authors,
+                       year=excluded.year,
+                       path=excluded.path,
+                       page=excluded.page,
+                       chunk_seq=excluded.chunk_seq,
+                       text=excluded.text,
+                       annotation=excluded.annotation""",
+                (
+                    evidence.id,
+                    evidence.paper_id,
+                    evidence.chunk_id,
+                    evidence.source_hash,
+                    evidence.paper_sha256,
+                    evidence.chunk_text_sha256,
+                    evidence.title,
+                    json.dumps(list(evidence.authors), ensure_ascii=False),
+                    evidence.year,
+                    evidence.path,
+                    evidence.page,
+                    evidence.chunk_seq,
+                    evidence.text,
+                    annotation_value,
+                    pinned_at,
+                ),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM evidence WHERE id=?", (evidence.id,)
+            ).fetchone()
+            if row is None:  # pragma: no cover - INSERT 后仅数据库损坏时可能发生
+                raise RuntimeError("证据写入后无法读取")
+            pinned = self._evidence_from_row_locked(row)
+        return pinned
+
+    def get_evidence(self, evidence_id: str) -> Optional[Evidence]:
+        """读取证据，并根据当前索引实时计算 ``stale`` 状态。"""
+
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM evidence WHERE id=?", (evidence_id,)
+                ).fetchone()
+                evidence = self._evidence_from_row_locked(row) if row else None
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return evidence
+
+    def list_evidence(self, limit: int = 100, offset: int = 0) -> list[Evidence]:
+        """按固定时间倒序列出证据，并逐条检查当前来源。"""
+
+        if limit < 0 or offset < 0:
+            raise ValueError("limit 和 offset 必须是非负整数")
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                rows = self._conn.execute(
+                    """SELECT * FROM evidence
+                       ORDER BY pinned_at DESC, id
+                       LIMIT ? OFFSET ?""",
+                    (limit, offset),
+                ).fetchall()
+                evidence = [self._evidence_from_row_locked(row) for row in rows]
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return evidence
+
+    # ---------- agent runs / events ----------
+
+    def create_agent_run(
+        self,
+        objective: str,
+        plan: Any = None,
+        budget: Any = None,
+        *,
+        status: str = "proposed",
+        run_id: Optional[str] = None,
+    ) -> AgentRunRecord:
+        """新建可恢复的 Agent 运行。"""
+
+        if not objective.strip():
+            raise ValueError("objective 不能为空")
+        self._validate_agent_run_status(status, parameter="status")
+        run_id = run_id or f"run_{uuid.uuid4().hex}"
+        created_at = now_iso()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO agent_runs
+                       (id, objective, status, plan, budget, error, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
+                (
+                    run_id,
+                    objective,
+                    status,
+                    self._json_dump_optional(plan),
+                    self._json_dump_optional(budget),
+                    created_at,
+                    created_at,
+                ),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM agent_runs WHERE id=?", (run_id,)
+            ).fetchone()
+            if row is None:  # pragma: no cover - INSERT 后仅数据库损坏时可能发生
+                raise RuntimeError("Agent Run 写入后无法读取")
+            record = self._agent_run_from_row(row)
+        return record
+
+    def get_agent_run(self, run_id: str) -> Optional[AgentRunRecord]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM agent_runs WHERE id=?", (run_id,)
+            ).fetchone()
+        return self._agent_run_from_row(row) if row else None
+
+    def transition_agent_run(
+        self,
+        run_id: str,
+        to_status: str,
+        expected_status: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> AgentRunRecord:
+        """原子转换运行状态；提供 expected_status 时执行 compare-and-swap。"""
+
+        self._validate_agent_run_status(to_status, parameter="to_status")
+        if expected_status is not None:
+            self._validate_agent_run_status(expected_status, parameter="expected_status")
+        updated_at = now_iso()
+        with self._lock, self._conn:
+            if expected_status is None:
+                cursor = self._conn.execute(
+                    """UPDATE agent_runs SET status=?, error=?, updated_at=?
+                       WHERE id=?""",
+                    (to_status, error, updated_at, run_id),
+                )
+            else:
+                cursor = self._conn.execute(
+                    """UPDATE agent_runs SET status=?, error=?, updated_at=?
+                       WHERE id=? AND status=?""",
+                    (to_status, error, updated_at, run_id, expected_status),
+                )
+            if not cursor.rowcount:
+                row = self._conn.execute(
+                    "SELECT status FROM agent_runs WHERE id=?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"Agent Run 不存在：{run_id}")
+                raise AgentRunStatusConflictError(
+                    f"Agent Run {run_id} 状态冲突："
+                    f"期望 {expected_status!r}，当前 {row['status']!r}"
+                )
+            row = self._conn.execute(
+                "SELECT * FROM agent_runs WHERE id=?", (run_id,)
+            ).fetchone()
+            if row is None:  # pragma: no cover
+                raise RuntimeError("Agent Run 状态更新后无法读取")
+            record = self._agent_run_from_row(row)
+        return record
+
+    def append_agent_event(
+        self,
+        run_id: str,
+        event_type: str,
+        payload: Any = None,
+    ) -> AgentEventRecord:
+        """为运行追加一个事务内分配序号的事件。"""
+
+        if not event_type.strip():
+            raise ValueError("event_type 不能为空")
+        created_at = now_iso()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if self._conn.execute(
+                    "SELECT 1 FROM agent_runs WHERE id=?", (run_id,)
+                ).fetchone() is None:
+                    raise KeyError(f"Agent Run 不存在：{run_id}")
+                seq_row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM agent_events WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+                cursor = self._conn.execute(
+                    """INSERT INTO agent_events
+                           (run_id, seq, event_type, payload, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        run_id,
+                        seq_row["seq"],
+                        event_type,
+                        self._json_dump_optional(payload),
+                        created_at,
+                    ),
+                )
+                event_id = int(cursor.lastrowid)
+                row = self._conn.execute(
+                    "SELECT * FROM agent_events WHERE id=?", (event_id,)
+                ).fetchone()
+                if row is None:  # pragma: no cover
+                    raise RuntimeError("Agent Event 写入后无法读取")
+                event = self._agent_event_from_row(row)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return event
+
+    def list_agent_events(
+        self,
+        run_id: str,
+        after_seq: int = 0,
+        limit: int = 1000,
+    ) -> list[AgentEventRecord]:
+        if after_seq < 0 or limit < 0:
+            raise ValueError("after_seq 和 limit 必须是非负整数")
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM agent_events
+                   WHERE run_id=? AND seq>?
+                   ORDER BY seq LIMIT ?""",
+                (run_id, after_seq, limit),
+            ).fetchall()
+        return [self._agent_event_from_row(row) for row in rows]
+
     # ---------- meta / stats ----------
 
     def meta_get(self, key: str) -> Optional[str]:
@@ -524,6 +925,147 @@ class Store:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _validate_agent_run_status(status: str, *, parameter: str) -> None:
+        if status not in _AGENT_RUN_STATUSES:
+            allowed = ", ".join(sorted(_AGENT_RUN_STATUSES))
+            raise ValueError(f"{parameter} 必须是以下状态之一：{allowed}")
+
+    @staticmethod
+    def _chunk_from_row(row: sqlite3.Row, include_embedding: bool = False) -> Chunk:
+        embedding = None
+        if include_embedding and "embedding" in row.keys() and row["embedding"] is not None:
+            embedding = np.frombuffer(row["embedding"], dtype=np.float32)
+        return Chunk(
+            id=row["id"],
+            paper_id=row["paper_id"],
+            seq=row["seq"],
+            page=row["page"],
+            text=row["text"],
+            embedding=embedding,
+        )
+
+    @staticmethod
+    def _text_sha256(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _evidence_source_hash(
+        paper_sha256: str,
+        chunk_seq: int,
+        page: int,
+        chunk_text_sha256: str,
+    ) -> str:
+        source = json.dumps(
+            [paper_sha256, int(chunk_seq), int(page), chunk_text_sha256],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    def _evidence_from_row_locked(self, row: sqlite3.Row) -> Evidence:
+        stale = False
+        stale_reason: Optional[str] = None
+        current_paper = self._conn.execute(
+            "SELECT id, sha256 FROM papers WHERE path=?", (row["path"],)
+        ).fetchone()
+        current_chunk = None
+        if current_paper is None:
+            stale = True
+            stale_reason = "论文已从当前索引移除"
+        elif current_paper["sha256"] != row["paper_sha256"]:
+            stale = True
+            stale_reason = "论文内容哈希已变化"
+        else:
+            current_chunk = self._conn.execute(
+                """SELECT id, paper_id, seq, page, text
+                   FROM chunks WHERE paper_id=? AND seq=?""",
+                (current_paper["id"], row["chunk_seq"]),
+            ).fetchone()
+            if current_chunk is None:
+                stale = True
+                stale_reason = "来源分块已从当前索引移除"
+            else:
+                current_text_hash = self._text_sha256(current_chunk["text"])
+                current_source_hash = self._evidence_source_hash(
+                    current_paper["sha256"],
+                    current_chunk["seq"],
+                    current_chunk["page"],
+                    current_text_hash,
+                )
+                if (
+                    current_chunk["page"] != row["page"]
+                    or current_text_hash != row["chunk_text_sha256"]
+                    or current_source_hash != row["source_hash"]
+                ):
+                    stale = True
+                    stale_reason = "来源分块内容或位置已变化"
+
+        return Evidence(
+            id=row["id"],
+            paper_id=(
+                current_paper["id"]
+                if not stale and current_paper is not None
+                else row["paper_id"]
+            ),
+            chunk_id=(
+                current_chunk["id"]
+                if not stale and current_chunk is not None
+                else row["chunk_id"]
+            ),
+            source_hash=row["source_hash"],
+            paper_sha256=row["paper_sha256"],
+            chunk_text_sha256=row["chunk_text_sha256"],
+            title=row["title"],
+            authors=tuple(json.loads(row["authors"])),
+            year=row["year"],
+            path=row["path"],
+            page=row["page"],
+            chunk_seq=row["chunk_seq"],
+            text=row["text"],
+            annotation=row["annotation"],
+            pinned_at=row["pinned_at"],
+            stale=stale,
+            stale_reason=stale_reason,
+        )
+
+    @staticmethod
+    def _json_dump_optional(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            value = to_dict()
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _json_load_optional(value: Optional[str]) -> Any:
+        return None if value is None else json.loads(value)
+
+    @classmethod
+    def _agent_run_from_row(cls, row: sqlite3.Row) -> AgentRunRecord:
+        return AgentRunRecord(
+            id=row["id"],
+            objective=row["objective"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            plan=cls._json_load_optional(row["plan"]),
+            budget=cls._json_load_optional(row["budget"]),
+            error=row["error"],
+        )
+
+    @classmethod
+    def _agent_event_from_row(cls, row: sqlite3.Row) -> AgentEventRecord:
+        return AgentEventRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            seq=row["seq"],
+            event_type=row["event_type"],
+            created_at=row["created_at"],
+            payload=cls._json_load_optional(row["payload"]),
+        )
 
     @staticmethod
     def _paper_from_row(row: sqlite3.Row) -> Paper:

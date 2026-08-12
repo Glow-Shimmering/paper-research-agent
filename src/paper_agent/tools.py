@@ -1,15 +1,30 @@
 """工具集：function calling 的 JSON schema 定义与执行器。
 
-工具：local_search / web_search / download_paper / index_papers / list_papers / library_status。
-实现里尽量复用现有模块（search / websearch / indexer / download / store）。
+兼容基础检索、下载、索引和笔记工具，并提供论文内检索、逐页阅读、
+分块上下文与稳定证据管理。实现尽量复用现有业务模块。
 """
+import copy
 import json
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Mapping, Optional
 
 from .models import Paper, SearchHit
+from .tool_protocol import (
+    ConfirmedAction,
+    PendingAction,
+    ToolEffect,
+    ToolResult,
+    ToolSpec,
+    ToolValidationError,
+    validate_tool_arguments,
+)
+
+_MAX_OUTLINE_PAGES = 100
+_MAX_OUTLINE_CHARS = 24_000
+_MAX_READ_PAGE_SPAN = 50
+_MAX_EVIDENCE_IDS_PER_PAGE = 50
 
 
 @dataclass
@@ -20,7 +35,8 @@ class ToolContext:
     embedder: Any
     llm: Any
     require_confirmation: bool = True
-    pending_action: Optional[tuple[str, dict]] = None
+    pending_action: Optional[PendingAction | tuple[str, dict]] = None
+    last_confirmed_action: Optional[ConfirmedAction] = None
 
     def library_dir(self) -> Optional[Path]:
         raw = self.store.meta_get("library_dir")
@@ -30,8 +46,99 @@ class ToolContext:
         return path if path.is_dir() else None
 
 
-def _hit_to_dict(h: SearchHit) -> dict:
+def _value(obj: Any, *names: str, default: Any = None) -> Any:
+    if isinstance(obj, Mapping):
+        for name in names:
+            if name in obj:
+                return obj[name]
+        return default
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return default
+
+
+def _evidence_id(evidence: Any) -> Optional[str]:
+    value = _value(evidence, "evidence_id", "id")
+    return str(value) if value is not None else None
+
+
+def _evidence_to_dict(evidence: Any) -> dict[str, Any]:
+    if evidence is None:
+        return {}
+    keys = (
+        "evidence_id",
+        "id",
+        "chunk_id",
+        "paper_id",
+        "source_hash",
+        "paper_sha256",
+        "chunk_text_sha256",
+        "title",
+        "authors",
+        "path",
+        "page",
+        "chunk_seq",
+        "text",
+        "annotation",
+        "pinned_at",
+        "stale",
+        "stale_reason",
+        "created_at",
+        "updated_at",
+    )
+    data = {
+        key: _value(evidence, key)
+        for key in keys
+        if _value(evidence, key) is not None
+    }
+    stable_id = _evidence_id(evidence)
+    if stable_id is not None:
+        data["evidence_id"] = stable_id
+        data.pop("id", None)
+    return data
+
+
+def _chunk_to_dict(ctx: ToolContext, chunk: Any, *, max_chars: int = 2_000) -> dict:
+    chunk_id = _value(chunk, "chunk_id", "id")
+    evidence = ctx.store.evidence_from_chunk(int(chunk_id)) if chunk_id is not None else None
+    text = str(_value(chunk, "text", default=""))
     return {
+        "chunk_id": chunk_id,
+        "paper_id": _value(chunk, "paper_id"),
+        "seq": _value(chunk, "seq"),
+        "page": _value(chunk, "page"),
+        "text": text[:max_chars],
+        "truncated": len(text) > max_chars,
+        "evidence_id": _evidence_id(evidence),
+    }
+
+
+def _chunk_preview(chunks: list[Any], max_chars: int) -> str:
+    """在不拼接整页全文的前提下生成有硬上限的预览。"""
+    parts: list[str] = []
+    remaining = max_chars
+    for chunk in chunks:
+        if remaining <= 0:
+            break
+        separator = " " if parts else ""
+        if separator:
+            parts.append(separator)
+            remaining -= 1
+        if remaining <= 0:
+            break
+        text = str(_value(chunk, "text", default=""))
+        parts.append(text[:remaining])
+        remaining -= min(len(text), remaining)
+    return "".join(parts)
+
+
+def _hit_to_dict(ctx: ToolContext, h: SearchHit) -> dict:
+    evidence = ctx.store.evidence_from_chunk(h.chunk_id)
+    return {
+        "chunk_id": h.chunk_id,
+        "paper_id": h.paper_id,
+        "evidence_id": _evidence_id(evidence),
         "title": h.title,
         "year": h.year,
         "path": h.path,
@@ -41,38 +148,46 @@ def _hit_to_dict(h: SearchHit) -> dict:
     }
 
 
-def _paper_to_dict(p: Paper) -> dict:
+def _paper_to_dict(p: Any) -> dict:
     return {
-        "id": p.id,
-        "title": p.title,
-        "authors": p.authors,
-        "year": p.year,
-        "path": p.path,
-        "page_count": p.page_count,
-        "has_text": p.has_text,
+        "id": _value(p, "paper_id", "id"),
+        "title": _value(p, "title"),
+        "authors": _value(p, "authors", default=[]),
+        "year": _value(p, "year"),
+        "path": _value(p, "path"),
+        "page_count": _value(p, "page_count"),
+        "has_text": _value(p, "has_text"),
     }
 
 
-def _local_search(ctx: ToolContext, query: str, top: int = 5) -> str:
+def _local_search(ctx: ToolContext, query: str, top: int = 5) -> ToolResult | str:
     from .search import hybrid_search
 
     hits = hybrid_search(ctx.store, ctx.embedder, query, top=max(1, min(top, 20)))
     if not hits:
         return "本地库未找到相关内容。"
-    return json.dumps([_hit_to_dict(h) for h in hits], ensure_ascii=False)
+    rows = [_hit_to_dict(ctx, hit) for hit in hits]
+    evidence_ids = tuple(row["evidence_id"] for row in rows if row["evidence_id"])
+    return ToolResult.success(data=rows, evidence_ids=evidence_ids)
 
 
-def _web_search(ctx: ToolContext, query: str, top: int = 5) -> str:
+def _web_search(ctx: ToolContext, query: str, top: int = 5) -> ToolResult:
     from .websearch import search_papers
 
     try:
         papers = search_papers(query, limit=max(1, min(top, 10)))
     except Exception as exc:
-        return f"联网检索失败：{exc}"
+        return ToolResult.error(
+            "web_search_failed",
+            f"联网检索失败：{exc}",
+            retryable=True,
+        )
     if not papers:
-        return "未找到相关论文（arXiv 以英文为主，建议用英文查询）。"
-    return json.dumps(
-        [
+        return ToolResult.success(
+            message="未找到相关论文（arXiv 以英文为主，建议用英文查询）。"
+        )
+    return ToolResult.success(
+        data=[
             {
                 "title": p.title,
                 "authors": p.authors,
@@ -83,7 +198,6 @@ def _web_search(ctx: ToolContext, query: str, top: int = 5) -> str:
             }
             for p in papers
         ],
-        ensure_ascii=False,
     )
 
 
@@ -91,7 +205,7 @@ def _download_paper(
     ctx: ToolContext,
     url: str,
     _confirmed_target_dir: Optional[str] = None,
-) -> str:
+) -> ToolResult:
     from . import config
     from .download import DownloadError, download_pdf
     from .indexer import index_pdf
@@ -103,15 +217,22 @@ def _download_paper(
         else config.download_dir_override() or ctx.library_dir()
     )
     if target_dir is None:
-        return (
-            "未配置下载目录：请在 .env 设置 PAPER_DOWNLOAD_DIR（或 PAPER_DATA_DIR），"
-            "或先运行 paper index <论文目录> 建立论文库。"
+        return ToolResult.error(
+            "download_dir_missing",
+            (
+                "未配置下载目录：请在 .env 设置 PAPER_DOWNLOAD_DIR（或 PAPER_DATA_DIR），"
+                "或先运行 paper index <论文目录> 建立论文库。"
+            ),
         )
     target_dir.mkdir(parents=True, exist_ok=True)
     try:
         path = download_pdf(url, target_dir)
     except DownloadError as exc:
-        return f"下载失败：{exc}"
+        return ToolResult.error(
+            "download_failed",
+            f"下载失败：{exc}",
+            retryable=True,
+        )
     try:
         result = index_pdf(
             ctx.store,
@@ -121,39 +242,60 @@ def _download_paper(
             progress=lambda msg: None,
         )
     except Exception as exc:
-        return f"已下载到 {path}，但索引失败：{exc}"
+        return ToolResult.error(
+            "download_index_failed",
+            f"已下载到 {path}，但索引失败：{exc}",
+            data={"path": str(path)},
+        )
     if result["failed"]:
-        return f"已下载到 {path}，但索引失败；原有索引未清理。"
-    return (
-        f"已下载并索引：{path}（新增 {result['added']}，更新 {result['updated']}，"
-        f"未变化 {result['unchanged']}）"
+        return ToolResult.error(
+            "download_index_failed",
+            f"已下载到 {path}，但索引失败；原有索引未清理。",
+            data={"path": str(path), "index_result": result},
+        )
+    return ToolResult.success(
+        message=(
+            f"已下载并索引：{path}（新增 {result['added']}，更新 {result['updated']}，"
+            f"未变化 {result['unchanged']}）"
+        ),
+        data={"path": str(path), "index_result": result},
     )
 
 
-def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> str:
+def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> ToolResult:
     from .indexer import index_library, validate_pdf_directory
 
     library_root = ctx.library_dir()
     if library_root is None:
-        return "尚未建立论文库；请先在终端运行 paper index <论文目录>。"
+        return ToolResult.error(
+            "library_missing",
+            "尚未建立论文库；请先在终端运行 paper index <论文目录>。",
+        )
     target = Path(dir) if dir else library_root
     try:
         target = validate_pdf_directory(target)
     except RuntimeError as exc:
-        return str(exc)
+        return ToolResult.error("invalid_library_directory", str(exc))
     if target != library_root.resolve():
-        return (
-            f"拒绝通过 Agent 切换论文库目录：{target}。"
-            "如需切换，请在终端显式运行 paper index <目录> --force。"
+        return ToolResult.error(
+            "library_switch_refused",
+            (
+                f"拒绝通过 Agent 切换论文库目录：{target}。"
+                "如需切换，请在终端显式运行 paper index <目录> --force。"
+            ),
         )
     try:
         result = index_library(ctx.store, target, ctx.embedder, progress=lambda msg: None)
     except Exception as exc:
-        return f"索引失败：{exc}"
-    return (
+        return ToolResult.error("index_failed", f"索引失败：{exc}")
+    message = (
         f"索引完成：新增 {result['added']}，更新 {result['updated']}，"
-        f"未变化 {result['unchanged']}，失败 {result['failed']}，无文本 {result['skipped_no_text']}"
+        f"未变化 {result['unchanged']}，失败 {result['failed']}，"
+        f"无文本 {result['skipped_no_text']}"
     )
+    if result["failed"]:
+        return ToolResult.error("index_partial_failure", message, data=result)
+    return ToolResult.success(message=message, data=result)
 
 
 def _list_papers(ctx: ToolContext, q: Optional[str] = None) -> str:
@@ -185,15 +327,15 @@ def _sanitize_filename(name: str) -> str:
     return name
 
 
-def _save_note(ctx: ToolContext, filename: str, content: str) -> str:
+def _save_note(ctx: ToolContext, filename: str, content: str) -> ToolResult:
     """保存笔记到 notes 目录：自动创建目录；同名自动加后缀不覆盖；仅允许单文件名。"""
     from . import config
 
     if len(content) > 1_000_000:
-        return "内容过长（超过 1MB），请分段保存。"
+        return ToolResult.error("note_too_large", "内容过长（超过 1MB），请分段保存。")
     name = _sanitize_filename(Path(filename).name)  # 只取 basename，防路径穿越
     if not name:
-        return "文件名无效。"
+        return ToolResult.error("invalid_note_filename", "文件名无效。")
     notes = config.notes_dir()
     notes.mkdir(parents=True, exist_ok=True)
     target = notes / name
@@ -204,7 +346,10 @@ def _save_note(ctx: ToolContext, filename: str, content: str) -> str:
             i += 1
         target = notes / f"{stem} ({i}){ext}"
     target.write_text(content, encoding="utf-8")
-    return f"已保存到 {target}"
+    return ToolResult.success(
+        message=f"已保存到 {target}",
+        data={"path": str(target)},
+    )
 
 
 def _list_notes(ctx: ToolContext) -> str:
@@ -221,7 +366,259 @@ def _list_notes(ctx: ToolContext) -> str:
     )
 
 
-_REGISTRY: dict[str, tuple[dict, Callable]] = {
+def _search_within_paper(
+    ctx: ToolContext,
+    paper_id: int,
+    query: str,
+    top: int = 5,
+) -> ToolResult:
+    from .search import search_within_paper
+
+    paper = ctx.store.paper_by_id(paper_id)
+    if paper is None:
+        return ToolResult.error("paper_not_found", f"未找到论文 paper_id={paper_id}")
+    hits = search_within_paper(
+        ctx.store,
+        ctx.embedder,
+        paper_id,
+        query,
+        top=top,
+    )
+    rows = [_hit_to_dict(ctx, hit) for hit in hits]
+    evidence_ids = tuple(row["evidence_id"] for row in rows if row["evidence_id"])
+    return ToolResult.success(
+        data={"paper": _paper_to_dict(paper), "hits": rows},
+        evidence_ids=evidence_ids,
+    )
+
+
+def _get_paper_outline(
+    ctx: ToolContext,
+    paper_id: int,
+    preview_chars: int = 240,
+) -> ToolResult:
+    paper = ctx.store.paper_by_id(paper_id)
+    if paper is None:
+        return ToolResult.error("paper_not_found", f"未找到论文 paper_id={paper_id}")
+    chunks = list(ctx.store.paper_chunks(paper_id))
+    by_page: dict[int, list[Any]] = {}
+    for chunk in chunks:
+        by_page.setdefault(int(_value(chunk, "page", default=0)), []).append(chunk)
+    pages = []
+    all_evidence: list[str] = []
+    page_groups = sorted(by_page.items())
+    remaining_preview_chars = _MAX_OUTLINE_CHARS
+    for page, page_chunks in page_groups:
+        if len(pages) >= _MAX_OUTLINE_PAGES or remaining_preview_chars <= 0:
+            break
+        evidence_ids = []
+        for chunk in page_chunks[:_MAX_EVIDENCE_IDS_PER_PAGE]:
+            chunk_id = _value(chunk, "chunk_id", "id")
+            if chunk_id is None:
+                continue
+            stable_id = _evidence_id(ctx.store.evidence_from_chunk(int(chunk_id)))
+            if stable_id:
+                evidence_ids.append(stable_id)
+                all_evidence.append(stable_id)
+        preview = _chunk_preview(
+            page_chunks,
+            min(preview_chars, remaining_preview_chars),
+        )
+        remaining_preview_chars -= len(preview)
+        pages.append(
+            {
+                "page": page,
+                "chunk_count": len(page_chunks),
+                "preview": preview[:preview_chars],
+                "evidence_ids": evidence_ids,
+                "evidence_ids_truncated": (
+                    len(page_chunks) > _MAX_EVIDENCE_IDS_PER_PAGE
+                ),
+            }
+        )
+    return ToolResult.success(
+        data={
+            "paper": _paper_to_dict(paper),
+            "pages": pages,
+            "total_chunk_pages": len(page_groups),
+            "truncated": len(pages) < len(page_groups),
+            "limits": {
+                "max_pages": _MAX_OUTLINE_PAGES,
+                "max_preview_chars": _MAX_OUTLINE_CHARS,
+            },
+        },
+        evidence_ids=tuple(dict.fromkeys(all_evidence)),
+    )
+
+
+def _read_pages(
+    ctx: ToolContext,
+    paper_id: int,
+    start_page: int,
+    end_page: Optional[int] = None,
+    max_chars: int = 12_000,
+) -> ToolResult:
+    from .pdf import extract_pdf
+
+    paper = ctx.store.paper_by_id(paper_id)
+    if paper is None:
+        return ToolResult.error("paper_not_found", f"未找到论文 paper_id={paper_id}")
+    final_page = start_page if end_page is None else end_page
+    if final_page < start_page:
+        return ToolResult.error("invalid_page_range", "end_page 不能小于 start_page")
+    if final_page - start_page + 1 > _MAX_READ_PAGE_SPAN:
+        return ToolResult.error(
+            "page_range_too_large",
+            f"单次最多读取 {_MAX_READ_PAGE_SPAN} 页，请拆分请求。",
+        )
+    paper_path = Path(str(_value(paper, "path")))
+    try:
+        current_sha256 = _sha256_file(paper_path)
+    except OSError as exc:
+        return ToolResult.error(
+            "paper_source_unavailable",
+            f"无法读取索引论文文件：{exc}。请确认文件可访问后重新运行 paper index。",
+        )
+    indexed_sha256 = str(_value(paper, "sha256", default=""))
+    if current_sha256 != indexed_sha256:
+        return ToolResult.error(
+            "paper_source_changed",
+            "论文文件已在索引后发生变化；为避免文本与证据引用不一致，请重新运行 paper index 后重试。",
+        )
+    try:
+        pages, _ = extract_pdf(paper_path)
+    except Exception as exc:
+        return ToolResult.error("pdf_read_failed", f"读取 PDF 失败：{exc}")
+    if start_page > len(pages) or final_page > len(pages):
+        return ToolResult.error(
+            "page_out_of_range",
+            f"页码超出范围；该论文共 {len(pages)} 页",
+        )
+
+    chunks_by_page: dict[int, list[Any]] = {}
+    for chunk in ctx.store.paper_chunks(paper_id):
+        chunks_by_page.setdefault(int(_value(chunk, "page", default=0)), []).append(chunk)
+    remaining = max_chars
+    output_pages = []
+    all_evidence: list[str] = []
+    for page_number in range(start_page, final_page + 1):
+        full_text = pages[page_number - 1]
+        text = full_text[:remaining]
+        remaining -= len(text)
+        evidence_ids = []
+        page_chunks = chunks_by_page.get(page_number, [])
+        for chunk in page_chunks[:_MAX_EVIDENCE_IDS_PER_PAGE]:
+            chunk_id = _value(chunk, "chunk_id", "id")
+            if chunk_id is None:
+                continue
+            stable_id = _evidence_id(ctx.store.evidence_from_chunk(int(chunk_id)))
+            if stable_id:
+                evidence_ids.append(stable_id)
+                all_evidence.append(stable_id)
+        output_pages.append(
+            {
+                "page": page_number,
+                "text": text,
+                "truncated": len(text) < len(full_text),
+                "evidence_ids": evidence_ids,
+                "evidence_ids_truncated": (
+                    len(page_chunks) > _MAX_EVIDENCE_IDS_PER_PAGE
+                ),
+            }
+        )
+        if remaining <= 0:
+            break
+    return ToolResult.success(
+        data={
+            "paper": _paper_to_dict(paper),
+            "requested_range": [start_page, final_page],
+            "pages": output_pages,
+            "budget_exhausted": remaining <= 0,
+        },
+        evidence_ids=tuple(dict.fromkeys(all_evidence)),
+    )
+
+
+def _read_chunk_context(
+    ctx: ToolContext,
+    chunk_id: int,
+    before: int = 2,
+    after: int = 2,
+) -> ToolResult:
+    raw_context = ctx.store.chunk_context(chunk_id, before, after)
+    chunks = raw_context.get("chunks", []) if isinstance(raw_context, Mapping) else raw_context
+    chunks = list(chunks or [])
+    if not chunks:
+        return ToolResult.error("chunk_not_found", f"未找到 chunk_id={chunk_id}")
+    rows = [_chunk_to_dict(ctx, chunk) for chunk in chunks]
+    evidence_ids = tuple(row["evidence_id"] for row in rows if row["evidence_id"])
+    return ToolResult.success(
+        data={"center_chunk_id": chunk_id, "chunks": rows},
+        evidence_ids=evidence_ids,
+    )
+
+
+def _pin_evidence(
+    ctx: ToolContext,
+    chunk_id: int,
+    annotation: str = "",
+) -> ToolResult:
+    evidence = ctx.store.pin_evidence(chunk_id, annotation)
+    data = _evidence_to_dict(evidence)
+    stable_id = _evidence_id(evidence)
+    if stable_id is None:
+        return ToolResult.error("evidence_pin_failed", "证据已固定，但存储层未返回 evidence_id")
+    return ToolResult.success(data=data, evidence_ids=(stable_id,))
+
+
+def _get_evidence(ctx: ToolContext, evidence_id: str) -> ToolResult:
+    evidence = ctx.store.get_evidence(evidence_id)
+    if evidence is None:
+        return ToolResult.error("evidence_not_found", f"未找到证据 {evidence_id}")
+    if bool(_value(evidence, "stale", default=False)):
+        return ToolResult.success(
+            data=_evidence_to_dict(evidence),
+            message=(
+                "该证据已过期，仅返回审计快照，不能作为当前答案的可引用证据："
+                f"{_value(evidence, 'stale_reason', default='来源已变化')}"
+            ),
+        )
+    return ToolResult.success(
+        data=_evidence_to_dict(evidence),
+        evidence_ids=(evidence_id,),
+    )
+
+
+def _list_evidence(ctx: ToolContext, limit: int = 20) -> ToolResult:
+    evidence_items = list(ctx.store.list_evidence(limit))
+    data = [_evidence_to_dict(item) for item in evidence_items]
+    evidence_ids = tuple(
+        stable_id
+        for item in evidence_items
+        if not bool(_value(item, "stale", default=False))
+        for stable_id in (_evidence_id(item),)
+        if stable_id is not None
+    )
+    stale_count = sum(bool(_value(item, "stale", default=False)) for item in evidence_items)
+    message = ""
+    if stale_count:
+        message = (
+            f"其中 {stale_count} 条证据已过期，仅作为审计快照展示，"
+            "未加入当前答案的可引用证据。"
+        )
+    return ToolResult.success(data=data, message=message, evidence_ids=evidence_ids)
+
+
+def _sha256_file(path: Path) -> str:
+    """计算磁盘论文的内容哈希，确保页面文本与索引证据属于同一版本。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+_RAW_TOOL_DECLARATIONS: dict[str, tuple[dict, Any]] = {
     "local_search": (
         {
             "type": "function",
@@ -349,12 +746,242 @@ _REGISTRY: dict[str, tuple[dict, Callable]] = {
     ),
 }
 
-TOOLS: list[dict] = [schema for schema, _ in _REGISTRY.values()]
+_REGISTRY: dict[str, ToolSpec] = {}
+TOOLS: list[dict[str, Any]] = []
+SCHEMA_NAMES: frozenset[str] = frozenset()
+MUTATING_TOOLS: frozenset[str] = frozenset()
+EXTERNAL_TOOLS: frozenset[str] = frozenset()
+CONFIRMATION_TOOLS: frozenset[str] = frozenset()
 
-SCHEMA_NAMES = set(_REGISTRY.keys())
-MUTATING_TOOLS = frozenset({"download_paper", "index_papers", "save_note"})
-EXTERNAL_TOOLS = frozenset({"web_search"})
-CONFIRMATION_TOOLS = MUTATING_TOOLS | EXTERNAL_TOOLS
+
+def _refresh_tool_exports() -> None:
+    """从唯一的 ToolSpec 注册表派生兼容导出，避免分类清单漂移。"""
+    global SCHEMA_NAMES, MUTATING_TOOLS, EXTERNAL_TOOLS, CONFIRMATION_TOOLS
+
+    TOOLS[:] = [spec.openai_schema() for spec in _REGISTRY.values()]
+    SCHEMA_NAMES = frozenset(_REGISTRY)
+    MUTATING_TOOLS = frozenset(
+        name for name, spec in _REGISTRY.items() if spec.mutating
+    )
+    EXTERNAL_TOOLS = frozenset(
+        name for name, spec in _REGISTRY.items() if spec.external
+    )
+    CONFIRMATION_TOOLS = MUTATING_TOOLS | EXTERNAL_TOOLS
+
+
+def register_tool(spec: ToolSpec) -> None:
+    """注册显式分类的工具；未使用 ToolSpec 或 effects 为空时立即失败。"""
+    if not isinstance(spec, ToolSpec):
+        raise ToolValidationError("工具必须通过 ToolSpec 注册并显式声明 effects")
+    if not spec.effects:
+        raise ToolValidationError(f"工具 {spec.name} effects 不能为空")
+    if spec.name in _REGISTRY:
+        raise ToolValidationError(f"工具 {spec.name} 重复注册")
+    _REGISTRY[spec.name] = spec
+    _refresh_tool_exports()
+
+
+def _constrained_parameters(
+    parameters: Mapping[str, Any],
+    constraints: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    normalized = copy.deepcopy(dict(parameters))
+    properties = normalized.setdefault("properties", {})
+    for field_name, rules in constraints.items():
+        properties[field_name].update(rules)
+    return normalized
+
+
+_LEGACY_EFFECTS: dict[str, frozenset[ToolEffect]] = {
+    "local_search": frozenset({ToolEffect.READ_LOCAL}),
+    "web_search": frozenset({ToolEffect.NETWORK}),
+    "download_paper": frozenset({ToolEffect.NETWORK, ToolEffect.WRITE_LOCAL}),
+    "index_papers": frozenset({ToolEffect.READ_LOCAL, ToolEffect.WRITE_LOCAL}),
+    "list_papers": frozenset({ToolEffect.READ_LOCAL}),
+    "library_status": frozenset({ToolEffect.READ_LOCAL}),
+    "save_note": frozenset({ToolEffect.WRITE_LOCAL}),
+    "list_notes": frozenset({ToolEffect.READ_LOCAL}),
+}
+
+_PARAMETER_CONSTRAINTS: dict[str, dict[str, dict[str, Any]]] = {
+    "local_search": {
+        "query": {"minLength": 1, "maxLength": 2_000},
+        "top": {"minimum": 1, "maximum": 20},
+    },
+    "web_search": {
+        "query": {"minLength": 1, "maxLength": 2_000},
+        "top": {"minimum": 1, "maximum": 10},
+    },
+    "download_paper": {"url": {"minLength": 1, "maxLength": 2_000}},
+    "index_papers": {"dir": {"minLength": 1, "maxLength": 32_767}},
+    "list_papers": {"q": {"maxLength": 500}},
+    "save_note": {
+        "filename": {"minLength": 1, "maxLength": 255},
+        "content": {"maxLength": 1_000_000},
+    },
+}
+
+_TOOL_RUNTIME_METADATA: dict[str, tuple[float, bool]] = {
+    "local_search": (30.0, True),
+    "web_search": (30.0, True),
+    "download_paper": (180.0, False),
+    "index_papers": (900.0, True),
+    "list_papers": (10.0, True),
+    "library_status": (5.0, True),
+    "save_note": (10.0, False),
+    "list_notes": (5.0, True),
+}
+
+
+for _name, (_schema, _handler) in _RAW_TOOL_DECLARATIONS.items():
+    _function_schema = _schema["function"]
+    _timeout_seconds, _idempotent = _TOOL_RUNTIME_METADATA[_name]
+    register_tool(
+        ToolSpec(
+            name=_name,
+            description=_function_schema["description"],
+            parameters=_constrained_parameters(
+                _function_schema["parameters"],
+                _PARAMETER_CONSTRAINTS.get(_name, {}),
+            ),
+            handler=_handler,
+            effects=_LEGACY_EFFECTS[_name],
+            timeout_seconds=_timeout_seconds,
+            idempotent=_idempotent,
+        )
+    )
+
+
+_DEEP_READING_SPECS = (
+    ToolSpec(
+        name="search_within_paper",
+        description="只在指定论文内进行关键词与语义混合检索，返回可引用的证据 ID。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "paper_id": {"type": "integer", "minimum": 1},
+                "query": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                "top": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["paper_id", "query"],
+        },
+        handler=_search_within_paper,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=30.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="get_paper_outline",
+        description="按页概览指定论文的分块、文本预览和稳定证据 ID。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "paper_id": {"type": "integer", "minimum": 1},
+                "preview_chars": {
+                    "type": "integer",
+                    "minimum": 50,
+                    "maximum": 1_000,
+                },
+            },
+            "required": ["paper_id"],
+        },
+        handler=_get_paper_outline,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=30.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="read_pages",
+        description="从指定论文 PDF 读取连续页，并返回对应的稳定证据 ID。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "paper_id": {"type": "integer", "minimum": 1},
+                "start_page": {"type": "integer", "minimum": 1},
+                "end_page": {"type": "integer", "minimum": 1},
+                "max_chars": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 50_000,
+                },
+            },
+            "required": ["paper_id", "start_page"],
+        },
+        handler=_read_pages,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=60.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="read_chunk_context",
+        description="读取目标分块及前后相邻分块，返回每段的稳定证据 ID。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "integer", "minimum": 1},
+                "before": {"type": "integer", "minimum": 0, "maximum": 10},
+                "after": {"type": "integer", "minimum": 0, "maximum": 10},
+            },
+            "required": ["chunk_id"],
+        },
+        handler=_read_chunk_context,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=15.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="pin_evidence",
+        description="把指定分块固定为可复用证据，并可附加批注。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "integer", "minimum": 1},
+                "annotation": {"type": "string", "maxLength": 5_000},
+            },
+            "required": ["chunk_id"],
+        },
+        handler=_pin_evidence,
+        effects=frozenset({ToolEffect.READ_LOCAL, ToolEffect.WRITE_LOCAL}),
+        timeout_seconds=10.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="get_evidence",
+        description="按稳定 evidence_id 读取一条已固定证据。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "evidence_id": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 128,
+                }
+            },
+            "required": ["evidence_id"],
+        },
+        handler=_get_evidence,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=10.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="list_evidence",
+        description="列出最近固定的证据及其稳定 evidence_id。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+            },
+        },
+        handler=_list_evidence,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=10.0,
+        idempotent=True,
+    ),
+)
+
+for _spec in _DEEP_READING_SPECS:
+    register_tool(_spec)
 
 
 def _pending_args(name: str, args: dict, ctx: ToolContext) -> dict:
@@ -370,13 +997,38 @@ def _pending_args(name: str, args: dict, ctx: ToolContext) -> dict:
     return pending
 
 
+def _coerce_pending_action(ctx: ToolContext) -> Optional[PendingAction]:
+    pending = ctx.pending_action
+    if pending is None:
+        return None
+    if isinstance(pending, PendingAction):
+        return pending
+    if (
+        isinstance(pending, tuple)
+        and len(pending) == 2
+        and isinstance(pending[0], str)
+        and isinstance(pending[1], Mapping)
+    ):
+        converted = PendingAction.create(pending[0], pending[1])
+        ctx.pending_action = converted
+        return converted
+    return None
+
+
 def pending_action_description(ctx: ToolContext, *, include_local_paths: bool = True) -> str:
     """返回可安全完整核对的待确认摘要；大文本使用长度、预览和哈希绑定。"""
-    if ctx.pending_action is None:
+    pending = _coerce_pending_action(ctx)
+    if pending is None:
         return "没有待确认的工具操作。"
-    name, args = ctx.pending_action
-    display: dict[str, Any] = {}
-    for key, value in args.items():
+    display: dict[str, Any] = {
+        "_action_id": pending.action_id,
+        "_digest": pending.digest,
+    }
+    if pending.tool_call_id is not None:
+        display["_tool_call_id"] = pending.tool_call_id
+    if pending.run_id is not None:
+        display["_run_id"] = pending.run_id
+    for key, value in pending.args.items():
         if key.startswith("_confirmed_") and not include_local_paths:
             display[key] = "（仅在本地确认界面显示）"
             continue
@@ -388,39 +1040,159 @@ def pending_action_description(ctx: ToolContext, *, include_local_paths: bool = 
             }
         else:
             display[key] = value
-    return f"{name}：{json.dumps(display, ensure_ascii=False)}"
+    return f"{pending.name}：{json.dumps(display, ensure_ascii=False)}"
+
+
+def _unclassified_result(name: str) -> ToolResult:
+    return ToolResult.error(
+        "tool_unclassified",
+        f"工具 {name} 未通过 ToolSpec 显式声明 effects，已拒绝执行。",
+    )
+
+
+def _handler_result(value: Any) -> ToolResult:
+    if isinstance(value, ToolResult):
+        return value
+    if isinstance(value, (dict, list)):
+        return ToolResult.success(data=value)
+    return ToolResult.success(message=str(value))
+
+
+def _run_handler(spec: ToolSpec, args: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
+    try:
+        return _handler_result(spec.handler(ctx, **dict(args)))
+    except Exception as exc:
+        return ToolResult.error(
+            "tool_execution_failed",
+            f"工具执行失败：{exc}",
+            retryable=spec.external,
+        )
+
+
+def _confirmation_result(pending: PendingAction, ctx: ToolContext) -> ToolResult:
+    return ToolResult(
+        ok=False,
+        code="confirmation_required",
+        message=(
+            "操作尚未执行。需要用户确认外部/写入操作："
+            f"{pending_action_description(ctx, include_local_paths=False)}。"
+            "请停止继续调用需确认的操作，并请用户在 TUI 输入 /confirm；"
+            "输入 /cancel 可取消。"
+        ),
+        requires_confirmation=True,
+        action_id=pending.action_id,
+        digest=pending.digest,
+    )
+
+
+def execute_tool_result(
+    name: str,
+    args: Any,
+    ctx: ToolContext,
+    *,
+    confirmed: bool = False,
+    tool_call_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    action_id: Optional[str] = None,
+    digest: Optional[str] = None,
+) -> ToolResult:
+    """执行工具并返回结构化结果；确认时只执行已绑定的冻结参数。"""
+    entry = _REGISTRY.get(name)
+    if entry is None:
+        return ToolResult.error(
+            "unknown_tool",
+            f"未知工具：{name}。可用工具：{', '.join(sorted(SCHEMA_NAMES))}",
+        )
+    if not isinstance(entry, ToolSpec) or not entry.effects:
+        return _unclassified_result(name)
+
+    if confirmed:
+        pending = _coerce_pending_action(ctx)
+        if pending is None:
+            return ToolResult.error("confirmation_missing", "没有待确认的工具操作。")
+        if action_id is None or digest is None:
+            return ToolResult.error(
+                "confirmation_binding_required",
+                "确认执行必须同时提供 action_id 与 digest。",
+            )
+        if pending.name != name:
+            return ToolResult.error(
+                "confirmation_mismatch",
+                f"确认票据属于 {pending.name}，不能执行 {name}。",
+            )
+        if action_id != pending.action_id:
+            return ToolResult.error("confirmation_mismatch", "action_id 与待确认操作不匹配。")
+        if digest != pending.digest:
+            return ToolResult.error("confirmation_mismatch", "digest 与待确认参数不匹配。")
+        if pending.tool_call_id is not None and tool_call_id != pending.tool_call_id:
+            return ToolResult.error(
+                "confirmation_mismatch",
+                "tool_call_id 与待确认操作不匹配。",
+            )
+        if pending.run_id is not None and run_id != pending.run_id:
+            return ToolResult.error(
+                "confirmation_mismatch",
+                "run_id 与待确认操作不匹配。",
+            )
+        if not pending.is_bound():
+            ctx.pending_action = None
+            return ToolResult.error(
+                "confirmation_mismatch",
+                "待确认参数已发生变化，操作已取消。",
+            )
+        ctx.pending_action = None
+        result = _run_handler(entry, pending.args, ctx)
+        ctx.last_confirmed_action = ConfirmedAction(
+            name=pending.name,
+            args=copy.deepcopy(pending.args),
+            action_id=pending.action_id,
+            digest=pending.digest,
+            result=result,
+            tool_call_id=pending.tool_call_id,
+            run_id=pending.run_id,
+        )
+        return result
+
+    try:
+        normalized_args = validate_tool_arguments(entry, args)
+    except ToolValidationError as exc:
+        return ToolResult.error("invalid_arguments", f"工具参数错误：{exc}")
+
+    if entry.needs_confirmation and ctx.require_confirmation:
+        pending = _coerce_pending_action(ctx)
+        if pending is None:
+            pending = PendingAction.create(
+                name,
+                _pending_args(name, normalized_args, ctx),
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+            )
+            ctx.pending_action = pending
+        return _confirmation_result(pending, ctx)
+    return _run_handler(entry, normalized_args, ctx)
 
 
 def execute_tool(name: str, args: dict, ctx: ToolContext, *, confirmed: bool = False) -> str:
     """执行工具，返回给 LLM 的文本结果。未知工具返回错误说明。"""
-    entry = _REGISTRY.get(name)
-    if entry is None:
-        return f"未知工具：{name}。可用工具：{', '.join(sorted(SCHEMA_NAMES))}"
-    normalized_args = dict(args or {})
-    if name in CONFIRMATION_TOOLS and ctx.require_confirmation and not confirmed:
-        if ctx.pending_action is None:
-            ctx.pending_action = (name, _pending_args(name, normalized_args, ctx))
-        details = pending_action_description(ctx, include_local_paths=False)
-        return (
-            f"操作尚未执行。需要用户确认外部/写入操作：{details}。"
-            "请停止继续调用需确认的操作，并请用户在 TUI 输入 /confirm；输入 /cancel 可取消。"
-        )
-    impl = entry[1]
-    try:
-        return impl(ctx, **normalized_args)
-    except TypeError as exc:
-        return f"工具参数错误：{exc}"
-    except Exception as exc:
-        return f"工具执行失败：{exc}"
+    return execute_tool_result(name, args, ctx, confirmed=confirmed).to_model_text()
 
 
 def confirm_pending_action(ctx: ToolContext) -> tuple[str, str]:
     """执行用户已确认的精确待办参数，返回 (tool_name, result)。"""
-    if ctx.pending_action is None:
+    pending = _coerce_pending_action(ctx)
+    if pending is None:
         return "", "没有待确认的工具操作。"
-    name, args = ctx.pending_action
-    ctx.pending_action = None
-    return name, execute_tool(name, args, ctx, confirmed=True)
+    result = execute_tool_result(
+        pending.name,
+        pending.args,
+        ctx,
+        confirmed=True,
+        tool_call_id=pending.tool_call_id,
+        run_id=pending.run_id,
+        action_id=pending.action_id,
+        digest=pending.digest,
+    )
+    return pending.name, result.to_model_text()
 
 
 def cancel_pending_action(ctx: ToolContext) -> bool:

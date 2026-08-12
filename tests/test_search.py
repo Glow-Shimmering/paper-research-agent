@@ -6,7 +6,7 @@ import pytest
 
 import paper_agent.search as search_module
 from paper_agent.models import Chunk, Paper
-from paper_agent.search import hybrid_search, rrf_fuse
+from paper_agent.search import hybrid_search, rrf_fuse, search_within_paper
 from paper_agent.store import Store
 
 
@@ -289,3 +289,71 @@ def test_rrf_fuse_math():
     fused = rrf_fuse([(0, 1.0), (1, 0.5)], [(1, 0.9), (0, 0.8)])
     assert fused[0] == pytest.approx(1 / 61 + 1 / 62)
     assert fused[1] == pytest.approx(1 / 62 + 1 / 61)
+
+
+def test_search_within_paper_requests_embeddings_and_accepts_dict_rows():
+    e0 = np.zeros(8, dtype=np.float32)
+    e0[0] = 1.0
+    e1 = np.zeros(8, dtype=np.float32)
+    e1[1] = 1.0
+
+    class RecordingStore:
+        def __init__(self):
+            self.include_embeddings_calls = []
+
+        def paper_by_id(self, paper_id):
+            return {
+                "id": paper_id,
+                "title": "字典论文",
+                "authors": ["A"],
+                "year": 2025,
+                "path": "dict.pdf",
+            }
+
+        def paper_chunks(self, paper_id, include_embeddings=False):
+            self.include_embeddings_calls.append(include_embeddings)
+            return [
+                {
+                    "id": 11,
+                    "paper_id": paper_id,
+                    "seq": 0,
+                    "page": 1,
+                    "text": "完全无关",
+                    "embedding": e1 if include_embeddings else None,
+                },
+                {
+                    "id": 12,
+                    "paper_id": paper_id,
+                    "seq": 1,
+                    "page": 2,
+                    "text": "语义目标",
+                    "embedding": e0 if include_embeddings else None,
+                },
+            ]
+
+        def meta_get(self, key):
+            return "fake" if key == "embed_model" else None
+
+    store = RecordingStore()
+    hits = search_within_paper(
+        store,
+        FakeEmbedder({"semantic query": e0}),
+        7,
+        "semantic query",
+        top=2,
+    )
+
+    assert store.include_embeddings_calls == [True]
+    assert hits and hits[0].chunk_id == 12
+    assert hits[0].paper_id == 7
+    assert hits[0].title == "字典论文"
+
+
+def test_search_within_paper_rejects_embedding_model_mismatch(tmp_path):
+    s, emb = seed_store(tmp_path, {"a.pdf": ["alpha"]})
+    s.meta_set("embed_model", "indexed-model")
+    emb.model_name = "query-model"
+
+    with pytest.raises(RuntimeError, match="索引由嵌入模型"):
+        search_within_paper(s, emb, 1, "alpha")
+    s.close()

@@ -2,13 +2,18 @@
 
 ## 项目说明
 
-论文整理与检索 Agent：整理本地论文资料库，提供检索与问答能力。
+证据优先的本地论文研究 Agent：整理 PDF 资料库，以受控工具调用完成检索、深读、问答与笔记。
 
 - 索引本地 PDF 论文库（增量：重复运行只处理变化的文件）
 - 混合检索：BM25 关键词 + 本地语义向量（fastembed，CPU 推理），RRF 融合
 - 问答：OpenAI 兼容 API（DeepSeek / OpenAI / 通义等），未配置 key 时退回纯检索
+- 受控 Agent：显式 run 状态、调用预算、工具效果分类、写入/联网确认与可恢复执行
+- 证据链：单篇检索、页面/相邻分块深读、稳定 evidence ID、固定证据与引用校验
+- 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景
 - CLI 与本地 Web 界面双入口
 - 索引过程只读：解析元数据建库浏览，不改动已有 PDF；下载工具会新增或原子替换同 arXiv 编号文件
+
+设计细节见 [架构说明](docs/architecture.md)。
 
 ## 安装
 
@@ -56,7 +61,7 @@ paper search "注意力机制"      # 混合检索
 paper websearch "llm survey"  # 联网检索 arXiv 论文（英文效果更佳）
 paper ask "这篇论文提出了什么方法？"  # 问答（需 API key）
 paper ask --web "问题"         # 问答时同时联网检索 arXiv 论文
-paper chat                    # TUI 对话：需要 API key；联网/写操作需 /confirm
+paper chat                    # 受控 Agent TUI：需要 API key；联网/写操作需 /confirm
 paper serve                   # 启动 Web 界面 http://127.0.0.1:8000
 paper status                  # 库与配置状态
 paper --version               # 显示当前版本（版本号与 wheel 元数据同源）
@@ -72,7 +77,13 @@ PDF 解析、分块、BM25 和向量嵌入均在本地执行。`paper ask`、`pa
 
 联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。
 
-`paper chat` 为终端对话界面（textual）：模型通过 function calling 使用本地库检索、arXiv 搜索、下载、索引、论文列表、库状态和笔记工具。本地只读检索/列表可自动执行；arXiv 联网搜索、下载、重索引、保存笔记不会立即执行，必须由用户检查工具名和参数后输入 `/confirm`，或输入 `/cancel` 取消。Agent 不能切换论文库根目录；切换目录必须在终端显式运行 `paper index <目录> --force`。对话内还支持 `/help`、`/clear`、`/copy`、`/export`、`/quit`。
+`paper chat` 为终端 Agent 界面（textual）。每个用户问题会创建一个持久 run，并按 `proposed → running → awaiting_confirmation → succeeded/failed/cancelled/blocked` 状态推进；轮次、工具调用、外部调用和引用修复都有硬预算。结构化事件只保存必要元数据、哈希、状态和结果摘要，便于定位失败与回放。
+
+模型可使用本地混合检索、单篇检索、分页概览、PDF 页面阅读、相邻分块阅读、固定/读取证据、论文列表、库状态、arXiv 搜索、下载、索引和笔记工具。读取本地资料可自动执行；联网或本地写入不会立即执行，必须先检查绑定了参数摘要与 SHA-256 的确认票据，再输入 `/confirm`。确认完成后 Agent 会沿原始 `tool_call_id` 自动续跑；`/cancel` 会记录取消结果并结束对应 run。Agent 不能切换论文库根目录；切换目录必须在终端显式运行 `paper index <目录> --force`。
+
+深读工具返回稳定的 `[E:ev_…]` 证据标记。Agent 的最终回答只能引用本轮真实返回的 evidence ID；索引中文件或分块发生变化后，已固定证据会标为 stale，而不是静默指向新内容。传统 `paper ask` 继续使用 `[n]` 引用，两条问答路径共享同一引用验证器。旧数据库会自动升级到 schema v2，保留已有论文与分块。
+
+对话内支持 `/help`、`/clear`、`/copy`、`/export`、`/confirm`、`/cancel`、`/quit`。
 
 ## 构建与测试
 
@@ -94,3 +105,5 @@ Python 3.11 可使用已验证的完整版本约束集复现开发环境；3.10/
 ```
 
 GitHub Actions 会在 Windows/Python 3.11 与 Ubuntu/Python 3.10、3.11、3.12 上执行测试，并在 3.11 上检查约束依赖与 wheel 资源。
+
+37 个 Agent 场景使用版本化 JSON 和脚本化 LLM/工具结果，不访问网络；它们用于回归状态机、预算和结构化引用合同，覆盖成功、拒答、引用错误、确认/取消、工具失败、重试和预算熔断等路径。真实 `chat_turn` 与工具确认边界由 `tests/test_chat.py`、`tests/test_tools.py` 的集成测试覆盖。该确定性场景集不调用真实模型，也不用于宣称模型具备提示注入抵抗能力，或引用证据与回答论断之间已经通过语义蕴含验证。

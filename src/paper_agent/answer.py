@@ -1,6 +1,6 @@
 """RAG 问答管线：检索 → 拼 prompt → LLM 生成（带 [n] 引用）。可选联网（arXiv）。"""
-import re
 
+from .agent import CitationVerificationError, require_valid_citations
 from .llm import LLMError
 from .search import hybrid_search
 from .websearch import WebPaper, search_papers
@@ -13,18 +13,12 @@ _SYSTEM = (
     "用中文回答（除非问题本身是其他语言）。"
 )
 
-_CITATION_RE = re.compile(r"\[(\d+)\]")
-
-
 def validate_citations(answer_text: str, source_count: int) -> None:
-    """拒绝缺失或越界的引用，避免把不可追溯回答交给用户。"""
-    citations = [int(n) for n in _CITATION_RE.findall(answer_text)]
-    invalid = sorted({n for n in citations if n < 1 or n > source_count})
-    if invalid:
-        values = "、".join(f"[{n}]" for n in invalid)
-        raise LLMError(f"LLM 返回了不存在的来源引用：{values}")
-    if source_count and not citations and "无法回答" not in answer_text:
-        raise LLMError("LLM 回答缺少 [n] 来源引用")
+    """兼容入口；底层与 Agent chat 共用同一引用验证器。"""
+    try:
+        require_valid_citations(answer_text, source_count=source_count)
+    except CitationVerificationError as exc:
+        raise LLMError(str(exc)) from exc
 
 
 def _format_block(n: int, hit) -> str:

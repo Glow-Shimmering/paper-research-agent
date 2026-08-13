@@ -1,6 +1,6 @@
-# paper-agent 架构说明
+# Pagent（paper-agent）架构说明
 
-本文描述 `v0.5.0` 的运行边界与关键设计。paper-agent 是一个证据优先的本地论文研究 Agent：PDF、索引和证据默认保存在本地，模型负责决策与生成，应用代码负责权限、状态、预算和引用约束。
+本文描述 `v0.6.0` 的运行边界与关键设计。Pagent 是一个证据优先的本地论文研究 Agent：PDF、索引和证据默认保存在本地，模型负责决策与生成，应用代码负责权限、状态、预算和引用约束。
 
 ## 组件
 
@@ -24,7 +24,7 @@ flowchart LR
 - `tool_protocol.py` / `tools.py`：工具合同、参数校验、副作用分类、确认票据和执行结果。
 - `store.py`：论文、分块、向量、稳定证据、Agent run 和事件日志的 SQLite 持久化。
 - `search.py`：BM25 与本地向量的混合检索及一致快照缓存。
-- `tui.py`：当前完整 Agent 入口；Web 在 `v0.5.0` 仍以检索和同步问答为主。
+- `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 在 `v0.6.0` 提供检索、SSE 流式问答和论文库浏览。
 
 ## Run 生命周期
 
@@ -85,4 +85,4 @@ SQLite schema v2 保存论文库和以下 Agent 数据：
 - 37 个离线 JSON 场景用于回归状态机、预算和引用合同。
 - 场景使用脚本化模型与工具结果，不代表真实模型质量、提示注入抵抗能力或语义蕴含评测。
 
-下一阶段会在此基础上增加真实任务 benchmark、Web Agent Workbench、流式事件和可视化 trace。
+下一阶段会在此基础上增加真实任务 benchmark、Web Agent Workbench 和可视化 trace。

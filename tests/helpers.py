@@ -47,6 +47,36 @@ class FakeEmbedder:
         return np.stack(out)
 
 
+class StreamFakeLLM:
+    """answer_stream 路径替身：chat_stream 生成器产出预设增量。"""
+
+    is_configured = True
+
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+
+    def chat_stream(self, system, user):
+        for piece in self.chunks:
+            yield piece
+
+
+class StreamingScriptLLM:
+    """chat_turn 流式路径替身：按脚本消费，并把 deltas 逐个回调。"""
+
+    is_configured = True
+    supports_streaming = True
+
+    def __init__(self, script):
+        self.script = list(script)
+
+    def chat_with_tools(self, system, messages, tools, on_delta=None):
+        item = self.script.pop(0)
+        for piece in item.get("deltas", []):
+            if on_delta is not None:
+                on_delta(piece)
+        return {"content": item.get("content"), "tool_calls": item.get("tool_calls", [])}
+
+
 def make_paper(path, title="标题", year=2020, **kw):
     base = dict(
         id=None, path=path, sha256="s", title=title, authors=["A"],

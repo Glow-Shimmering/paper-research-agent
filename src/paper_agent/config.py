@@ -43,7 +43,16 @@ for _k, _v in (dotenv_values(ENV_FILE) if ENV_FILE else {}).items():
     if _v is not None and (_k not in os.environ or not os.environ[_k]):
         os.environ[_k] = _v
 
-LIBRARY_DIR = Path(_env_or_default("PAPER_DATA_DIR", str(Path.home() / ".paper-agent")))
+def _default_library_dir() -> Path:
+    """数据目录：优先 ``~/.pagent``；存在旧版 ``~/.paper-agent`` 时无缝沿用。"""
+    home = Path.home()
+    legacy = home / ".paper-agent"
+    if legacy.is_dir():
+        return legacy
+    return home / ".pagent"
+
+
+LIBRARY_DIR = Path(_env_or_default("PAPER_DATA_DIR", str(_default_library_dir())))
 DB_PATH = LIBRARY_DIR / "library.db"
 LLM_BASE_URL = _env_or_default("PAPER_LLM_BASE_URL", "https://api.deepseek.com")
 LLM_API_KEY = os.getenv("PAPER_LLM_API_KEY", "")

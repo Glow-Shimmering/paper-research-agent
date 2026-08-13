@@ -1,15 +1,17 @@
-"""FastAPI Web 应用：检索 / 问答 / 论文库 / 重新索引。"""
+"""FastAPI Web 应用：检索 / 问答（含 SSE 流式）/ 论文库 / 重新索引。"""
+import json
 from contextlib import asynccontextmanager
 from importlib import resources
 from pathlib import Path
 import threading
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import config
+from .answer import answer_stream
 from .answer import ask as answer_ask
 from .embeddings import Embedder
 from .indexer import index_library
@@ -24,7 +26,7 @@ def _web_directory() -> str:
     """返回随 Python 包安装的 Web 静态资源目录。"""
     web_dir = resources.files("paper_agent").joinpath("web")
     if not web_dir.is_dir():
-        raise RuntimeError("paper-agent 安装不完整：缺少 Web 静态资源")
+        raise RuntimeError("Pagent 安装不完整：缺少 Web 静态资源")
     return str(web_dir)
 
 
@@ -39,6 +41,26 @@ def _hit_dict(h) -> dict:
         "score": round(h.score, 6),
         "text": h.text,
     }
+
+
+def _web_paper_dict(p) -> dict:
+    return {
+        "title": p.title,
+        "authors": p.authors,
+        "year": p.year,
+        "abstract": p.abstract,
+        "url": p.url,
+        "pdf_url": p.pdf_url,
+    }
+
+
+def _sse_event(event: dict) -> dict:
+    """把事件中的 dataclass 字段转换为 JSON 可序列化结构。"""
+    data = dict(event)
+    if data.get("type") == "context":
+        data["hits"] = [_hit_dict(h) for h in data.get("hits", [])]
+        data["web_papers"] = [_web_paper_dict(p) for p in data.get("web_papers", [])]
+    return data
 
 
 def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) -> FastAPI:
@@ -87,7 +109,7 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                 owned_llm = LLMClient(config.LLM_BASE_URL, config.LLM_API_KEY, config.LLM_MODEL)
             return owned_llm
 
-    app = FastAPI(title="paper-agent", lifespan=lifespan)
+    app = FastAPI(title="Pagent", lifespan=lifespan)
 
     @app.middleware("http")
     async def protect_api(request: Request, call_next):
@@ -218,6 +240,46 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
             ],
         }
 
+    @app.post("/api/ask/stream")
+    async def api_ask_stream(payload: dict):
+        question = (payload or {}).get("question", "")
+        web = bool((payload or {}).get("web", False))
+        if not question.strip():
+            raise HTTPException(status_code=400, detail="question 不能为空")
+        if len(question) > 20_000:
+            raise HTTPException(status_code=413, detail="question 超过 20000 字符限制")
+        if not network_slots.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="联网/问答请求过多，请稍后重试")
+        try:
+            gen = answer_stream(_store(), _embedder(), _llm(), question, top=8, web=web)
+        except WebSearchError as exc:
+            network_slots.release()
+            raise HTTPException(status_code=502, detail=str(exc))
+        except Exception:
+            network_slots.release()
+            raise
+
+        async def sse_stream():
+            """SSE 事件流：context → delta* → complete/error；断开时释放并发槽。"""
+            sentinel = object()
+            try:
+                while True:
+                    event = await run_in_threadpool(next, gen, sentinel)
+                    if event is sentinel:
+                        break
+                    yield f"data: {json.dumps(_sse_event(event), ensure_ascii=False)}\n\n"
+            except (LLMError, WebSearchError) as exc:
+                payload = {"type": "error", "message": str(exc)}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            finally:
+                network_slots.release()
+
+        return StreamingResponse(
+            sse_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/api/websearch")
     def api_websearch(
         q: str = Query(..., min_length=1, max_length=2_000),
@@ -303,9 +365,14 @@ def serve(
                 "拒绝通过明文 HTTP 远程传输 API key 和论文数据；请配置 TLS，"
                 "使用 HTTPS 反向代理到 127.0.0.1，或仅在可信网络显式添加 --allow-insecure-http"
             )
-    uvicorn.run(
-        create_app(api_key=config.WEB_API_KEY),
-        host=host,
-        port=port,
-        **tls_options,
-    )
+    try:
+        uvicorn.run(
+            create_app(api_key=config.WEB_API_KEY),
+            host=host,
+            port=port,
+            **tls_options,
+        )
+    except KeyboardInterrupt:
+        # Windows/Python 3.11 下 uvicorn 会带着 KeyboardInterrupt 栈噪音退出；
+        # 服务已正常关闭，静默吞掉避免吓到用户。
+        pass

@@ -85,6 +85,7 @@ def chat_turn(
     create_run: bool = False,
     confirmed_tool_result: Any = None,
     confirmed_tool_call_id: Optional[str] = None,
+    on_delta: Optional[Any] = None,
 ) -> tuple[list[dict], list[TurnLog]]:
     """执行一轮受控对话，保持原有 ``(messages, logs)`` 返回签名。
 
@@ -93,9 +94,15 @@ def chat_turn(
     确认操作完成后，把真实结果通过 ``confirmed_tool_result`` 传回；函数会
     使用原始 ``tool_call_id`` 追加真正的 tool 消息后继续，而不是在暂停时
     写占位回执。
+
+    ``on_delta`` 为流式回调（每次收到一段模型内容增量时调用）；仅当 LLM
+    声明 ``supports_streaming`` 时透传给模型客户端，脚本化测试替身不受影响。
     """
     logs: list[TurnLog] = []
     resolved_budget = AgentBudget.from_value(budget)
+    stream_callback = (
+        on_delta if on_delta is not None and getattr(llm, "supports_streaming", False) else None
+    )
     runtime, active_run_id = _prepare_runtime(
         messages=messages,
         ctx=ctx,
@@ -188,9 +195,17 @@ def chat_turn(
             {"round": round_number, "history_messages": len(messages)},
         )
         try:
-            resp = llm.chat_with_tools(
-                SYSTEM_PROMPT, _history_for_request(messages), TOOL_SCHEMAS
-            )
+            if stream_callback is None:
+                resp = llm.chat_with_tools(
+                    SYSTEM_PROMPT, _history_for_request(messages), TOOL_SCHEMAS
+                )
+            else:
+                resp = llm.chat_with_tools(
+                    SYSTEM_PROMPT,
+                    _history_for_request(messages),
+                    TOOL_SCHEMAS,
+                    on_delta=stream_callback,
+                )
         except Exception as exc:
             _append_event(
                 ctx,

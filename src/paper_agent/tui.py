@@ -1,10 +1,12 @@
-"""textual TUI：论文助手对话界面（模型可调用工具）。"""
+"""textual TUI：Pagent 论文助手对话界面（模型可调用工具，流式回答）。"""
 import asyncio
+import threading
 from datetime import datetime
 
 from rich.markup import escape
+from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header, Input, RichLog
+from textual.widgets import Footer, Header, Input, RichLog, Static
 
 from . import __version__
 from .chat import cancel_pending_run, chat_turn
@@ -21,7 +23,7 @@ def _now_stamp() -> str:
 
 
 class ChatApp(App):
-    TITLE = "论文助手"
+    TITLE = "Pagent"
     SUB_TITLE = f"v{__version__} 对话模式"
 
     CSS = """
@@ -29,6 +31,13 @@ class ChatApp(App):
         height: 1fr;
         border: round $primary;
         padding: 1;
+    }
+    #streaming {
+        display: none;
+        border: round $success;
+        padding: 1 2;
+        margin-top: 1;
+        color: $success;
     }
     #input {
         dock: bottom;
@@ -41,16 +50,21 @@ class ChatApp(App):
         self._llm = llm
         self._ctx = ctx
         self._messages: list[dict] = []
+        # 流式回答：LLM 线程写入缓冲区，增量经 call_from_thread 同步渲染。
+        self._stream_lock = threading.Lock()
+        self._stream_buffer: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield RichLog(id="log", highlight=True, markup=True, wrap=True)
+        yield Static(id="streaming", expand=True)
         yield Input(id="input", placeholder="输入问题；/help /confirm /cancel /quit")
 
     def on_mount(self) -> None:
         self._log(
-            "[cyan]论文助手对话模式：模型可自动调用工具"
-            "（检索 / 深读 / 固定证据 / arXiv / 下载 / 索引）。输入 /help 查看命令。[/cyan]"
+            "[cyan]Pagent 论文助手对话模式：模型可自动调用工具"
+            "（检索 / 深读 / 固定证据 / arXiv / 下载 / 索引），回答逐字流式输出。"
+            "输入 /help 查看命令。[/cyan]"
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -144,9 +158,11 @@ class ChatApp(App):
                         run_id=run_id,
                         confirmed_tool_result=structured_result or result,
                         confirmed_tool_call_id=tool_call_id,
+                        on_delta=self._on_answer_delta,
                     )
                     self._messages = new_messages
-                    self._render_logs(logs)
+                    streamed = self._finish_stream()
+                    self._render_logs(logs, streamed=streamed)
                 else:
                     # 兼容手工注入的旧式 pending tuple；真实 Agent pending 总会
                     # 带原始 tool_call_id，并走上面的协议化续跑路径。
@@ -225,13 +241,16 @@ class ChatApp(App):
                 self._ctx,
                 objective=objective,
                 create_run=create_run,
+                on_delta=self._on_answer_delta,
             )
         except Exception as exc:
+            self._finish_stream()
             self._log(f"[red]调用失败：{escape(str(exc))}[/red]")
             self._respond_done()
             return
+        streamed = self._finish_stream()
         self._messages = new_messages
-        self._render_logs(logs)
+        self._render_logs(logs, streamed=streamed)
         if self._ctx.pending_action is not None:
             self._log(
                 "[yellow]待确认："
@@ -240,11 +259,51 @@ class ChatApp(App):
             )
         self._respond_done()
 
-    def _render_logs(self, logs) -> None:
-        """把 Agent 事件的用户可见部分统一渲染到 TUI。"""
+    def _on_answer_delta(self, piece: str) -> None:
+        """LLM 线程回调：记录增量并同步调度到事件循环渲染。
+
+        ``call_from_thread`` 会阻塞调用线程直到渲染完成，因此增量按到达
+        顺序严格渲染，聊天线程返回前所有增量都已落盘。
+        """
+        with self._stream_lock:
+            self._stream_buffer.append(piece)
+        self.call_from_thread(self._render_stream_delta)
+
+    def _render_stream_delta(self) -> None:
+        """在 App 事件循环线程把累计增量刷新到流式面板。"""
+        with self._stream_lock:
+            text = "".join(self._stream_buffer)
+        panel = self.query_one("#streaming", Static)
+        panel.styles.display = "block"
+        panel.update(Text(text, style="green"))
+
+    def _finish_stream(self) -> str:
+        """结束流式渲染并返回完整流式文本（须在 App 事件循环线程调用）。
+
+        把面板内容一次性落入 RichLog（保持绿色助手样式），随后隐藏面板；
+        流式文本会跳过日志中的 assistant 条目，避免重复展示。
+        """
+        with self._stream_lock:
+            text = "".join(self._stream_buffer)
+            self._stream_buffer = []
+        panel = self.query_one("#streaming", Static)
+        panel.styles.display = "none"
+        panel.update("")
+        if text:
+            self._log(f"[green]{escape(text)}[/green]\n")
+        return text
+
+    def _render_logs(self, logs, *, streamed: str = "") -> None:
+        """把 Agent 事件的用户可见部分统一渲染到 TUI。
+
+        流式模式下模型文本（含工具轮的口头说明与最终回答）已实时渲染，
+        跳过 assistant 条目避免重复。
+        """
         for entry in logs:
-            if entry.role == "assistant" and entry.content:
-                self._log(f"[green]{escape(entry.content)}[/green]\n")
+            if entry.role == "assistant":
+                if not streamed and entry.content:
+                    self._log(f"[green]{escape(entry.content)}[/green]\n")
+                continue
             elif entry.role == "tool":
                 arg_str = ", ".join(f"{k}={v}" for k, v in (entry.tool_args or {}).items())
                 if len(arg_str) > 500:

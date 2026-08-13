@@ -6,7 +6,7 @@ from paper_agent.tools import ToolContext
 from paper_agent.tui import ChatApp
 from textual.widgets import Input, RichLog
 
-from helpers import FakeEmbedder, make_paper
+from helpers import FakeEmbedder, StreamingScriptLLM, make_paper
 
 
 class FakeLLM:
@@ -360,3 +360,35 @@ def test_chat_app_export(tmp_path, monkeypatch):
     assert "**你**：库里有什么？" in content
     assert "**助手**：库里有 1 篇论文。" in content
     assert "library_status" in content
+
+
+def test_chat_app_streams_answer_into_log(tmp_path):
+    llm = StreamingScriptLLM(
+        [
+            {
+                "content": "库里有 1 篇论文。",
+                "tool_calls": [],
+                "deltas": ["库里", "有 1 篇论文。"],
+            },
+        ]
+    )
+
+    async def run():
+        ctx = make_ctx(tmp_path)
+        ctx.llm = llm
+        app = ChatApp(llm=llm, ctx=ctx)
+        async with app.run_test() as pilot:
+            inp = app.query_one(Input)
+            inp.focus()
+            await pilot.pause(0.1)
+            inp.value = "库里有什么？"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.1)
+                if not app.query_one(Input).disabled:
+                    break
+            return log_text(app)
+
+    text = asyncio.run(run())
+    # 流式通道已渲染最终回答，日志渲染必须跳过 assistant 条目避免重复
+    assert text.count("库里有 1 篇论文。") == 1

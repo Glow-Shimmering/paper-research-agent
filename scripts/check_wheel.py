@@ -27,21 +27,21 @@ def _run_installed_smoke(wheel: Path) -> None:
     child_env = os.environ.copy()
     child_env["PYTHONPATH"] = str(dependency_site)
     child_env["PYTHONNOUSERSITE"] = "1"
-    with tempfile.TemporaryDirectory(prefix="paper-agent-wheel-check-") as raw:
+    with tempfile.TemporaryDirectory(prefix="pagent-wheel-check-") as raw:
         environment = Path(raw) / "venv"
         venv.EnvBuilder(with_pip=True).create(environment)
         if os.name == "nt":
             python = environment / "Scripts" / "python.exe"
-            paper = environment / "Scripts" / "paper.exe"
+            pagent = environment / "Scripts" / "pagent.exe"
         else:
             python = environment / "bin" / "python"
-            paper = environment / "bin" / "paper"
+            pagent = environment / "bin" / "pagent"
         subprocess.run(
             [str(python), "-m", "pip", "install", "--no-deps", str(wheel.resolve())],
             check=True,
         )
         version = subprocess.run(
-            [str(paper), "--version"],
+            [str(pagent), "--version"],
             check=True,
             capture_output=True,
             text=True,
@@ -66,9 +66,9 @@ assert '<html' in response.text.lower()
 
 def main() -> None:
     wheel_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
-    wheels = sorted(wheel_dir.glob("paper_agent-*.whl"))
+    wheels = sorted(wheel_dir.glob("pagent-*.whl"))
     if len(wheels) != 1:
-        raise SystemExit(f"expected exactly one paper-agent wheel in {wheel_dir}, found {len(wheels)}")
+        raise SystemExit(f"expected exactly one pagent wheel in {wheel_dir}, found {len(wheels)}")
     with zipfile.ZipFile(wheels[0]) as archive:
         names = set(archive.namelist())
     missing = sorted(REQUIRED - names)

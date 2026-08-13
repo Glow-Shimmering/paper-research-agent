@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "paper-agent"
+name = "pagent"
 dynamic = ["version"]
-description = "论文整理与检索 Agent：整理本地论文资料库，提供检索与问答能力"
+description = "Pagent：论文整理与检索 Agent——整理本地论文资料库，提供检索、问答与受控 Agent 对话"
 requires-python = ">=3.10"
 dependencies = [
     "pymupdf>=1.24",
@@ -26,6 +26,7 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [project.scripts]
+pagent = "paper_agent.cli:app"
 paper = "paper_agent.cli:app"
 
 [tool.setuptools.packages.find]

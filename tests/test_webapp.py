@@ -278,7 +278,7 @@ def test_index_page(tmp_path):
     r = client.get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    assert "论文助手" in r.text
+    assert "Pagent" in r.text
 
 
 def test_websearch_endpoint(monkeypatch, tmp_path):

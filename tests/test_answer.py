@@ -58,14 +58,19 @@ def test_ask_full_flow(tmp_path):
     assert answer == "[1] 测试回答"
     assert retrieval_only is False
     assert web_papers == []
-    assert len(sources) == 1
+    # 来源 = 命中片段 + 论文库目录
+    assert len(sources) == 2
     assert sources[0] == {
         "n": 1, "title": "论文一", "year": 2023, "path": "a.pdf", "page": 1, "web": False,
     }
-    # prompt 模板：问题 + 带题目/年份/页码的引用块
+    assert sources[1]["catalog"] is True
+    assert sources[1]["title"] == "论文一"
+    # prompt 模板：问题 + 带题目/年份/页码的引用块 + 论文库目录
     assert "问题：这篇论文讲了什么？" in llm.last_user
     assert "[1]《论文一》（2023）第1页：" in llm.last_user
     assert "注意力机制的提出背景与动机。" in llm.last_user
+    assert "论文库目录" in llm.last_user
+    assert "[2]《论文一》（2023） 作者：A（库藏）" in llm.last_user
     assert "严谨的论文检索助手" in llm.last_system
 
 
@@ -78,14 +83,32 @@ def test_ask_web_flow(tmp_path, monkeypatch):
     answer, sources, hits, retrieval_only, web_papers = ask(s, emb, llm, "最新的注意力架构", web=True)
     assert retrieval_only is False
     assert len(web_papers) == 1
-    # 本地 1 条 + 联网 1 条，编号连续
+    # 本地片段 + 库藏目录 + 联网结果，编号连续
     assert "[1]《论文一》（2023）第1页：" in llm.last_user
-    assert "[2]《A New Attention Architecture》（2025）[arXiv 联网] Carol、Dave：" in llm.last_user
+    assert "[3]《A New Attention Architecture》（2025）[arXiv 联网] Carol、Dave：" in llm.last_user
     assert "novel attention architecture" in llm.last_user
-    assert sources[1] == {
-        "n": 2, "title": "A New Attention Architecture", "year": 2025,
+    assert sources[1]["catalog"] is True
+    assert sources[2] == {
+        "n": 3, "title": "A New Attention Architecture", "year": 2025,
         "path": "http://arxiv.org/abs/2501.00001", "page": None, "web": True,
     }
+
+
+def test_ask_catalog_question_uses_catalog(tmp_path, monkeypatch):
+    """库藏类问题：正文命中为空时仍可用论文库目录回答。"""
+    import paper_agent.answer as answer_mod
+
+    monkeypatch.setattr(answer_mod, "hybrid_search", lambda *a, **k: [])
+    s, emb = seed(tmp_path, ["正文内容。"])
+    llm = FakeLLM()
+    answer, sources, hits, retrieval_only, web_papers = ask(s, emb, llm, "库里有几篇论文？")
+    assert answer == "[1] 测试回答"
+    assert hits == []
+    assert len(sources) == 1
+    assert sources[0]["catalog"] is True
+    assert sources[0]["title"] == "论文一"
+    assert "论文库目录" in llm.last_user
+    assert "[1]《论文一》（2023） 作者：A（库藏）" in llm.last_user
 
 
 def test_ask_web_only_no_local_hits(tmp_path, monkeypatch):
@@ -158,7 +181,7 @@ def test_ask_llm_error_raised(tmp_path):
 def test_ask_rejects_invalid_citation(tmp_path):
     s, emb = seed(tmp_path, ["内容。"])
     with pytest.raises(LLMError, match="不存在的来源引用"):
-        ask(s, emb, FakeLLM("结论 [2]"), "问题")
+        ask(s, emb, FakeLLM("结论 [9]"), "问题")
 
 
 def test_ask_rejects_missing_citation_but_allows_abstention(tmp_path):

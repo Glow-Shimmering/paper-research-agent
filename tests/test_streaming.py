@@ -139,7 +139,8 @@ def test_answer_stream_emits_context_deltas_complete(tmp_path):
 
     assert events[0]["type"] == "context"
     assert events[0]["retrieval_only"] is False
-    assert len(events[0]["sources"]) == 1
+    assert len(events[0]["sources"]) == 2  # 命中片段 + 库藏目录
+    assert events[0]["sources"][1]["catalog"] is True
     deltas = [e["text"] for e in events if e["type"] == "delta"]
     assert "".join(deltas) == "回答开头 [1]，回答结尾 [1]。"
     assert events[-1]["type"] == "complete"

@@ -203,7 +203,10 @@ def _print_ask_sources(sources, web: bool, web_papers) -> None:
         typer.echo("\n来源：")
         for s in sources:
             year = f"（{s['year']}）" if s["year"] else ""
-            tag = " [arXiv 联网]" if s["web"] else ""
+            if s.get("catalog"):
+                tag = "（库藏）"
+            else:
+                tag = " [arXiv 联网]" if s["web"] else ""
             if s["page"] is not None:
                 typer.echo(f"  [{s['n']}] {s['title']}{year} 第{s['page']}页 — {s['path']}{tag}")
             else:

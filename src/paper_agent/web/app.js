@@ -236,7 +236,8 @@ function renderAskSources(el, sources) {
       addText(a, s.path);
       div.appendChild(a);
     } else {
-      addText(div, "[" + s.n + "] " + s.title + (s.year ? "（" + s.year + "）" : "") + " 第" + s.page + "页 — " + s.path);
+      const loc = (s.page !== null && s.page !== undefined) ? " 第" + s.page + "页 — " : " — ";
+      addText(div, "[" + s.n + "] " + s.title + (s.year ? "（" + s.year + "）" : "") + loc + s.path + (s.catalog ? "（库藏）" : ""));
     }
     el.appendChild(div);
   }
@@ -446,5 +447,290 @@ async function reindex() {
     addText(info, "重新索引失败：" + err.message);
   }
 }
+
+// ---- Agent ----
+$("#agent-btn").addEventListener("click", runAgent);
+$("#agent-q").addEventListener("keydown", function (e) { if (e.key === "Enter") runAgent(); });
+$("#agent-new").addEventListener("click", newAgentSession);
+
+function hide(el) { el.classList.add("hidden"); }
+function unhide(el) { el.classList.remove("hidden"); }
+
+function agentSessionId() {
+  let id = sessionStorage.getItem("pagent-agent-session");
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : "s-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    sessionStorage.setItem("pagent-agent-session", id);
+  }
+  return id;
+}
+
+function newAgentSession() {
+  sessionStorage.removeItem("pagent-agent-session");
+  clear($("#agent-flow"));
+  hide($("#agent-pending"));
+  clear($("#agent-pending"));
+  $("#agent-q").value = "";
+}
+
+function agentScroll() {
+  const flow = $("#agent-flow");
+  flow.scrollTop = flow.scrollHeight;
+}
+
+function agentAddUser(q) {
+  const div = document.createElement("div");
+  div.className = "msg msg-user";
+  addText(div, q);
+  $("#agent-flow").appendChild(div);
+  agentScroll();
+}
+
+function agentStartAssistant() {
+  const node = document.createElement("div");
+  node.className = "msg msg-assistant";
+  const textEl = document.createElement("div");
+  textEl.className = "agent-text";
+  node.appendChild(textEl);
+  $("#agent-flow").appendChild(node);
+  agentScroll();
+  return { raw: "", textEl: textEl, node: node };
+}
+
+function agentRenderText(block) {
+  const parts = block.raw.split(/(\[E:[^\]]+\])/g);
+  block.textEl.replaceChildren();
+  for (const part of parts) {
+    if (/^\[E:[^\]]+\]$/.test(part)) {
+      const mark = document.createElement("mark");
+      mark.className = "evidence";
+      addText(mark, part);
+      block.textEl.appendChild(mark);
+    } else {
+      addText(block.textEl, part);
+    }
+  }
+  agentScroll();
+}
+
+function agentAddTool(name, args, result, code) {
+  const card = document.createElement("div");
+  card.className = "tool-card";
+  const head = document.createElement("div");
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "tool-name";
+  addText(nameSpan, name);
+  head.appendChild(nameSpan);
+  let argsText = "";
+  try { argsText = JSON.stringify(args || {}); } catch (e) { /* 忽略 */ }
+  if (argsText && argsText !== "{}") {
+    addText(head, "(" + argsText.slice(0, 200) + ")");
+  }
+  if (code && code !== "ok" && code !== "confirmed") {
+    addText(head, " [" + code + "]");
+  }
+  card.appendChild(head);
+  if (result) {
+    const r = document.createElement("div");
+    r.className = "tool-result";
+    addText(r, String(result).slice(0, 500));
+    card.appendChild(r);
+  }
+  $("#agent-flow").appendChild(card);
+  agentScroll();
+}
+
+function agentAddNote(text, cls) {
+  const div = document.createElement("div");
+  div.className = "note " + cls;
+  addText(div, text);
+  $("#agent-flow").appendChild(div);
+  agentScroll();
+}
+
+function renderAgentPending(event) {
+  const box = $("#agent-pending");
+  clear(box);
+  const card = document.createElement("div");
+  card.className = "pending-card";
+  const h = document.createElement("h3");
+  addText(h, "待确认操作：" + event.name);
+  const summary = document.createElement("div");
+  summary.className = "pending-summary";
+  addText(summary, event.summary || "");
+  const digest = document.createElement("div");
+  digest.className = "pending-digest";
+  addText(digest, "绑定摘要 SHA-256：" + (event.digest || ""));
+  const actions = document.createElement("div");
+  actions.className = "pending-actions";
+  const ok = document.createElement("button");
+  ok.className = "pending-ok";
+  addText(ok, "确认执行");
+  ok.addEventListener("click", function () { agentConfirm(true); });
+  const no = document.createElement("button");
+  no.className = "pending-no";
+  addText(no, "取消");
+  no.addEventListener("click", function () { agentConfirm(false); });
+  actions.append(ok, no);
+  card.append(h, summary, digest, actions);
+  box.appendChild(card);
+  unhide(box);
+}
+
+let agentBusy = false;
+function agentSetBusy(busy) {
+  agentBusy = busy;
+  $("#agent-btn").disabled = busy;
+  $("#agent-q").disabled = busy;
+}
+
+function agentStatus(text, isError) {
+  const el = $("#agent-status");
+  unhide(el);
+  el.textContent = text;
+  el.style.color = isError ? "#a8071a" : "#888";
+}
+
+async function consumeAgentStream(url, body) {
+  const assistantBlock = agentStartAssistant();
+  showThinking(assistantBlock.textEl);
+  let status = null;
+  try {
+    await apiStream(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      function (event) {
+        if (event.type === "session") return;
+        if (event.type === "assistant_delta") {
+          assistantBlock.raw += event.text;
+          agentRenderText(assistantBlock);
+          agentStatus("正在生成…");
+        } else if (event.type === "tool") {
+          agentAddTool(event.name, event.args, event.result, event.code);
+        } else if (event.type === "verification") {
+          agentAddNote(event.message, "note-verify");
+        } else if (event.type === "error") {
+          agentAddNote(event.message, "note-error");
+        } else if (event.type === "pending") {
+          renderAgentPending(event);
+        } else if (event.type === "run") {
+          currentRunId = event.run_id;
+        } else if (event.type === "complete") {
+          status = event.status;
+        }
+      }
+    );
+  } catch (err) {
+    agentAddNote("请求失败：" + err.message, "note-error");
+  }
+  if (!assistantBlock.raw) {
+    assistantBlock.node.remove();
+  }
+  return status;
+}
+
+let currentRunId = null;
+
+async function runAgent() {
+  const q = $("#agent-q").value.trim();
+  if (!q || agentBusy) return;
+  if (!$("#agent-pending").classList.contains("hidden")) {
+    agentStatus("上方有待确认操作，请先确认或取消。", true);
+    return;
+  }
+  agentSetBusy(true);
+  $("#agent-q").value = "";
+  hide($("#agent-pending"));
+  clear($("#agent-pending"));
+  agentAddUser(q);
+  agentStatus("正在检索与思考…");
+  const status = await consumeAgentStream("/api/agent/chat", {
+    session_id: agentSessionId(),
+    question: q,
+  });
+  if (status === "awaiting_confirmation") {
+    agentStatus("等待确认（见上方卡片）");
+  } else {
+    agentStatus("完成（" + (status || "done") + "）", status === "failed" || status === "blocked");
+  }
+  agentSetBusy(false);
+  refreshAgentRuns();
+}
+
+async function agentConfirm(confirm) {
+  if (agentBusy) return;
+  agentSetBusy(true);
+  hide($("#agent-pending"));
+  clear($("#agent-pending"));
+  agentAddNote(confirm ? "已确认执行，继续运行…" : "已取消该操作。", "note-dim");
+  agentStatus(confirm ? "已确认，正在执行…" : "已取消");
+  const status = await consumeAgentStream("/api/agent/confirm", {
+    session_id: agentSessionId(),
+    confirm: confirm,
+  });
+  if (status === "awaiting_confirmation") {
+    agentStatus("等待确认（见上方卡片）");
+  } else {
+    agentStatus("完成（" + (status || "done") + "）", status === "failed" || status === "blocked");
+  }
+  agentSetBusy(false);
+  refreshAgentRuns();
+}
+
+// ---- Run 审计侧栏 ----
+async function refreshAgentRuns() {
+  try {
+    const data = await api("/api/agent/runs?limit=50");
+    const box = $("#agent-runs");
+    clear(box);
+    if (!data.items.length) { addText(box, "暂无 Agent run。"); return; }
+    for (const r of data.items) {
+      const row = document.createElement("div");
+      row.className = "run-row run-" + r.status;
+      row.title = (r.objective || "") + "（" + r.run_id + "）";
+      addText(row, r.status + " · " + (r.objective || "").slice(0, 24));
+      row.addEventListener("click", function () { loadRunEvents(r.run_id, row); });
+      box.appendChild(row);
+    }
+  } catch (err) { /* 侧栏失败不打断主流程 */ }
+}
+
+async function loadRunEvents(runId, rowEl) {
+  try {
+    const data = await api("/api/agent/runs/" + encodeURIComponent(runId) + "/events");
+    const box = $("#agent-run-events");
+    clear(box);
+    if (rowEl) {
+      document.querySelectorAll(".run-row").forEach(function (r) { r.classList.remove("selected"); });
+      rowEl.classList.add("selected");
+    }
+    for (const e of data.items) {
+      const div = document.createElement("div");
+      div.className = "event-row";
+      const type = document.createElement("span");
+      type.className = "event-type";
+      addText(type, "#" + e.seq + " " + e.event_type);
+      div.appendChild(type);
+      let payloadText = "";
+      try { payloadText = JSON.stringify(e.payload || {}); } catch (err) { /* 忽略 */ }
+      if (payloadText && payloadText !== "{}") {
+        addText(div, " " + payloadText.slice(0, 120));
+      }
+      box.appendChild(div);
+    }
+  } catch (err) {
+    const box = $("#agent-run-events");
+    clear(box);
+    addText(box, "加载事件失败：" + err.message);
+  }
+}
+
+refreshAgentRuns();
 
 loadLibrary();

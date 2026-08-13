@@ -842,6 +842,23 @@ class Store:
             ).fetchall()
         return [self._agent_event_from_row(row) for row in rows]
 
+    def list_agent_runs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AgentRunRecord]:
+        """按创建时间倒序浏览 Agent run（Web 审计侧栏）。"""
+        if limit < 0 or offset < 0:
+            raise ValueError("limit 和 offset 必须是非负整数")
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM agent_runs
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
+            ).fetchall()
+        return [self._agent_run_from_row(row) for row in rows]
+
     # ---------- meta / stats ----------
 
     def meta_get(self, key: str) -> Optional[str]:

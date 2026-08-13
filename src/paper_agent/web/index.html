@@ -12,6 +12,7 @@
   <nav>
     <button data-tab="search" class="tab active">检索</button>
     <button data-tab="ask" class="tab">问答</button>
+    <button data-tab="agent" class="tab">Agent</button>
     <button data-tab="library" class="tab">论文库</button>
   </nav>
 </header>
@@ -34,6 +35,25 @@
     <div id="ask-status" class="ask-status hidden"></div>
     <pre id="ask-answer"></pre>
     <div id="ask-sources"></div>
+  </section>
+  <section id="tab-agent" class="tabpanel">
+    <div class="agent-layout">
+      <div class="agent-main">
+        <div id="agent-flow"></div>
+        <div id="agent-pending" class="hidden"></div>
+        <div id="agent-status" class="ask-status hidden"></div>
+        <div class="row">
+          <input id="agent-q" placeholder="输入研究任务，如：比较 CRAB 与 BACO 的方法差异">
+          <button id="agent-btn">发送</button>
+          <button id="agent-new">新会话</button>
+        </div>
+      </div>
+      <aside class="agent-side">
+        <h2>Run 审计</h2>
+        <div id="agent-runs"></div>
+        <div id="agent-run-events"></div>
+      </aside>
+    </div>
   </section>
   <section id="tab-library" class="tabpanel">
     <div class="row">

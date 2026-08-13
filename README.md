@@ -6,8 +6,9 @@
 
 - 索引本地 PDF 论文库（增量：重复运行只处理变化的文件）
 - 混合检索：BM25 关键词 + 本地语义向量（fastembed，CPU 推理），RRF 融合
-- 问答：OpenAI 兼容 API（DeepSeek / OpenAI / 通义等），未配置 key 时退回纯检索；CLI、TUI 与 Web 均支持流式输出
+- 问答：OpenAI 兼容 API（DeepSeek / OpenAI / 通义等），未配置 key 时退回纯检索；CLI、TUI 与 Web 均支持流式输出；回答“库里有哪些论文”类问题时以注入的论文库目录为权威来源（正文中的参考文献不算库藏）
 - 受控 Agent：显式 run 状态、调用预算、工具效果分类、写入/联网确认与可恢复执行
+- Web 端 Agent：SSE 流式对话、实时工具调用卡片、可视化确认票据、证据高亮与 run 审计侧栏
 - 证据链：单篇检索、页面/相邻分块深读、稳定 evidence ID、固定证据与引用校验
 - 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景
 - CLI 与本地 Web 界面双入口（命令名 `pagent`，保留 `paper` 别名）
@@ -62,7 +63,7 @@ pagent websearch "llm survey"   # 联网检索 arXiv 论文（英文效果更佳
 pagent ask "这篇论文提出了什么方法？"   # 问答（需 API key，默认流式输出；--no-stream 关闭）
 pagent ask --web "问题"         # 问答时同时联网检索 arXiv 论文
 pagent chat                     # 受控 Agent TUI：需要 API key；回答逐字流式渲染，联网/写操作需 /confirm
-pagent serve                    # 启动 Web 界面 http://127.0.0.1:8000（检索/问答/论文库三个标签页）
+pagent serve                    # 启动 Web 界面 http://127.0.0.1:8000（检索/问答/Agent/论文库四个标签页）
 pagent status                   # 库与配置状态
 pagent --version                # 显示当前版本（版本号与 wheel 元数据同源）
 ```
@@ -77,7 +78,7 @@ Windows 下 CLI 会把标准输出和错误输出配置为 UTF-8，含数学符�
 
 PDF 解析、分块、BM25 和向量嵌入均在本地执行。`pagent ask`、`pagent chat` 和 `pagent index --refine` 会把问题以及命中的论文片段或首页文本发送给 `PAPER_LLM_BASE_URL` 指向的第三方服务；`--web`/`websearch` 会把查询词发送给 arXiv。敏感论文应使用可信的自托管兼容接口，或使用 `--no-llm` 纯检索模式。
 
-联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。
+联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。Web 的「Agent」标签页与 `pagent chat` 共享同一受控运行时：工具调用实时展示，联网或写入操作会弹出待确认卡片（含参数摘要与绑定摘要），点击「确认执行」后沿原始 `tool_call_id` 续跑，或点击「取消」终止；每次对话都会生成可审计的 run，可在侧栏回放结构化事件时间线。
 
 `pagent chat` 为终端 Agent 界面（textual）。每个用户问题会创建一个持久 run，并按 `proposed → running → awaiting_confirmation → succeeded/failed/cancelled/blocked` 状态推进；轮次、工具调用、外部调用和引用修复都有硬预算。结构化事件只保存必要元数据、哈希、状态和结果摘要，便于定位失败与回放。
 

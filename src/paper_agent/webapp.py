@@ -1,4 +1,4 @@
-"""FastAPI Web 应用：检索 / 问答（含 SSE 流式）/ 论文库 / 重新索引。"""
+"""FastAPI Web 应用：检索 / 问答（含 SSE 流式）/ Agent（SSE 受控对话）/ 论文库 / 重新索引。"""
 import json
 from contextlib import asynccontextmanager
 from importlib import resources
@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import config
+from .agent_api import register_agent_api
 from .answer import answer_stream
 from .answer import ask as answer_ask
 from .embeddings import Embedder
@@ -327,6 +328,8 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                 )
 
         return await run_in_threadpool(reindex_locked)
+
+    register_agent_api(app, store_factory=_store, embedder_factory=_embedder, llm_factory=_llm)
 
     app.mount("/", StaticFiles(directory=_web_directory(), html=True), name="web")
     return app

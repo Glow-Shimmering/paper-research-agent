@@ -781,6 +781,14 @@ def register_tool(spec: ToolSpec) -> None:
     _refresh_tool_exports()
 
 
+def unregister_tool(name: str) -> None:
+    """移除已注册工具（供测试注入/清理；内置工具不应被移除）。"""
+    if name not in _REGISTRY:
+        return
+    del _REGISTRY[name]
+    _refresh_tool_exports()
+
+
 def _constrained_parameters(
     parameters: Mapping[str, Any],
     constraints: Mapping[str, Mapping[str, Any]],

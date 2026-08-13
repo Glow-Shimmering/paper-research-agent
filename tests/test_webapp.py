@@ -173,9 +173,10 @@ def test_ask_ok(tmp_path):
     data = r.json()
     assert data["answer"] == "[1] 测试回答"
     assert data["retrieval_only"] is False
-    assert len(data["sources"]) == 1
+    assert len(data["sources"]) == 2  # 命中片段 + 库藏目录
     assert data["sources"][0]["title"] == "论文一"
     assert data["sources"][0]["web"] is False
+    assert data["sources"][1]["catalog"] is True
     assert len(data["hits"]) == 1
     assert data["web_papers"] == []
 
@@ -199,9 +200,10 @@ def test_ask_with_web(tmp_path, monkeypatch):
     r = client.post("/api/ask", json={"question": "问题", "web": True})
     assert r.status_code == 200
     data = r.json()
-    assert len(data["sources"]) == 2
-    assert data["sources"][1]["web"] is True
-    assert data["sources"][1]["path"] == "http://arxiv.org/abs/2501.1"
+    assert len(data["sources"]) == 3  # 片段 + 库藏 + 联网
+    assert data["sources"][1]["catalog"] is True
+    assert data["sources"][2]["web"] is True
+    assert data["sources"][2]["path"] == "http://arxiv.org/abs/2501.1"
     assert len(data["web_papers"]) == 1
     assert data["web_papers"][0]["title"] == "Web Paper Title"
 

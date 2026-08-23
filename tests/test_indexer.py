@@ -3,9 +3,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from paper_agent.indexer import index_library, index_pdf
-from paper_agent.models import Chunk, Paper
-from paper_agent.store import Store
+from pragent.indexer import index_library, index_pdf
+from pragent.models import Chunk, Paper
+from pragent.store import Store
 
 from helpers import FakeEmbedder, make_pdf, noop_progress
 
@@ -346,7 +346,7 @@ def test_refine_metadata_used(monkeypatch, tmp_path):
     def fake_refine(llm, filename, first_text):
         return {"title": "提炼出的标题", "authors": ["李四"], "year": 2024}
 
-    import paper_agent.indexer as indexer_mod
+    import pragent.indexer as indexer_mod
 
     monkeypatch.setattr(indexer_mod, "refine_metadata", fake_refine)
     s = Store(tmp_path / "db.sqlite")
@@ -369,7 +369,7 @@ def test_refine_failure_keeps_fallback(monkeypatch, tmp_path):
     def fake_refine(llm, filename, first_text):
         return None  # 解析失败
 
-    import paper_agent.indexer as indexer_mod
+    import pragent.indexer as indexer_mod
 
     monkeypatch.setattr(indexer_mod, "refine_metadata", fake_refine)
     s = Store(tmp_path / "db.sqlite")

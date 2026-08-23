@@ -45,7 +45,7 @@ class LLMClient:
         response_id 的调用方使用本方法或读取 ``last_response_metadata``。
         """
         if not self.is_configured:
-            raise LLMError("未配置 PAPER_LLM_API_KEY")
+            raise LLMError("未配置 PRA_LLM_API_KEY")
         try:
             resp = self._get_client().chat.completions.create(
                 model=self.model,
@@ -74,7 +74,7 @@ class LLMClient:
         迭代中途的异常统一包装为 ``LLMError``。
         """
         if not self.is_configured:
-            raise LLMError("未配置 PAPER_LLM_API_KEY")
+            raise LLMError("未配置 PRA_LLM_API_KEY")
         try:
             stream = self._get_client().chat.completions.create(
                 model=self.model,
@@ -124,7 +124,7 @@ class LLMClient:
         读取，行为与非流式一致。带 tool_calls 的响应通常没有内容增量。
         """
         if not self.is_configured:
-            raise LLMError("未配置 PAPER_LLM_API_KEY")
+            raise LLMError("未配置 PRA_LLM_API_KEY")
         if on_delta is None:
             return self._chat_with_tools_plain(system, messages, tools)
         try:

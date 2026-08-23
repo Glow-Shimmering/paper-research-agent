@@ -1,4 +1,4 @@
-from paper_agent.chunking import chunk_text
+from pragent.chunking import chunk_text
 
 
 def test_empty_input():

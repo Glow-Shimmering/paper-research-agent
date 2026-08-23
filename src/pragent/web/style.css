@@ -25,11 +25,11 @@ pre { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 
 .ask-error { background: #fff1f0; border: 1px solid #ffa39e; color: #a8071a; padding: 8px 12px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
 .ask-status { color: #888; font-size: 13px; margin-bottom: 8px; min-height: 18px; }
 .thinking { display: flex; align-items: center; gap: 10px; color: #555; font-size: 14px; }
-.spinner { width: 16px; height: 16px; border: 2px solid #d6e4ff; border-top-color: #1a73e8; border-radius: 50%; animation: pagent-spin 0.8s linear infinite; flex: none; }
+.spinner { width: 16px; height: 16px; border: 2px solid #d6e4ff; border-top-color: #1a73e8; border-radius: 50%; animation: pra-spin 0.8s linear infinite; flex: none; }
 .thinking-text { display: inline-flex; align-items: center; }
-.think-dot { width: 3px; height: 3px; margin-left: 2px; border-radius: 50%; background: #888; opacity: 0.2; animation: pagent-blink 1.2s infinite; }
-@keyframes pagent-spin { to { transform: rotate(360deg); } }
-@keyframes pagent-blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+.think-dot { width: 3px; height: 3px; margin-left: 2px; border-radius: 50%; background: #888; opacity: 0.2; animation: pra-blink 1.2s infinite; }
+@keyframes pra-spin { to { transform: rotate(360deg); } }
+@keyframes pra-blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
 .hidden { display: none; }
 table { width: 100%; border-collapse: collapse; background: #fff; }
 th, td { border: 1px solid #e0e0e0; padding: 6px 10px; text-align: left; font-size: 13px; word-break: break-all; }

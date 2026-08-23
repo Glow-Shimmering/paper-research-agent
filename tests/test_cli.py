@@ -2,15 +2,15 @@ import io
 
 from typer.testing import CliRunner
 
-from paper_agent import __version__
-from paper_agent.cli import _configure_stream_utf8, app
+from pragent import __version__
+from pragent.cli import _configure_stream_utf8, app
 
 
 def test_cli_version_uses_package_version():
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == f"pagent {__version__}"
+    assert result.stdout.strip() == f"pra {__version__}"
 
 
 def test_cli_configures_output_stream_as_utf8():

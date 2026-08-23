@@ -11,9 +11,9 @@ from pathlib import Path
 
 
 REQUIRED = {
-    "paper_agent/web/index.html",
-    "paper_agent/web/app.js",
-    "paper_agent/web/style.css",
+    "pragent/web/index.html",
+    "pragent/web/app.js",
+    "pragent/web/style.css",
 }
 
 
@@ -27,21 +27,21 @@ def _run_installed_smoke(wheel: Path) -> None:
     child_env = os.environ.copy()
     child_env["PYTHONPATH"] = str(dependency_site)
     child_env["PYTHONNOUSERSITE"] = "1"
-    with tempfile.TemporaryDirectory(prefix="pagent-wheel-check-") as raw:
+    with tempfile.TemporaryDirectory(prefix="pra-wheel-check-") as raw:
         environment = Path(raw) / "venv"
         venv.EnvBuilder(with_pip=True).create(environment)
         if os.name == "nt":
             python = environment / "Scripts" / "python.exe"
-            pagent = environment / "Scripts" / "pagent.exe"
+            pra = environment / "Scripts" / "pra.exe"
         else:
             python = environment / "bin" / "python"
-            pagent = environment / "bin" / "pagent"
+            pra = environment / "bin" / "pra"
         subprocess.run(
             [str(python), "-m", "pip", "install", "--no-deps", str(wheel.resolve())],
             check=True,
         )
         version = subprocess.run(
-            [str(pagent), "--version"],
+            [str(pra), "--version"],
             check=True,
             capture_output=True,
             text=True,
@@ -50,11 +50,11 @@ def _run_installed_smoke(wheel: Path) -> None:
         probe = """
 from pathlib import Path
 import sys
-import paper_agent
+import pragent
 from fastapi.testclient import TestClient
-from paper_agent.webapp import _web_directory, create_app
+from pragent.webapp import _web_directory, create_app
 
-assert str(Path(paper_agent.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()))
+assert str(Path(pragent.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()))
 assert Path(_web_directory()).is_dir()
 response = TestClient(create_app()).get('/')
 assert response.status_code == 200
@@ -66,9 +66,12 @@ assert '<html' in response.text.lower()
 
 def main() -> None:
     wheel_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
-    wheels = sorted(wheel_dir.glob("pagent-*.whl"))
+    wheels = sorted(wheel_dir.glob("paper_research_agent-*.whl"))
     if len(wheels) != 1:
-        raise SystemExit(f"expected exactly one pagent wheel in {wheel_dir}, found {len(wheels)}")
+        raise SystemExit(
+            f"expected exactly one paper-research-agent wheel in {wheel_dir}, "
+            f"found {len(wheels)}"
+        )
     with zipfile.ZipFile(wheels[0]) as archive:
         names = set(archive.namelist())
     missing = sorted(REQUIRED - names)

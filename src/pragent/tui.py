@@ -1,4 +1,4 @@
-"""textual TUI：Pagent 论文助手对话界面（模型可调用工具，流式回答）。"""
+"""textual TUI：PRAgent 论文助手对话界面（模型可调用工具，流式回答）。"""
 import asyncio
 import threading
 from datetime import datetime
@@ -23,7 +23,7 @@ def _now_stamp() -> str:
 
 
 class ChatApp(App):
-    TITLE = "Pagent"
+    TITLE = "PRAgent"
     SUB_TITLE = f"v{__version__} 对话模式"
 
     CSS = """
@@ -62,7 +62,7 @@ class ChatApp(App):
 
     def on_mount(self) -> None:
         self._log(
-            "[cyan]Pagent 论文助手对话模式：模型可自动调用工具"
+            "[cyan]PRAgent 论文助手对话模式：模型可自动调用工具"
             "（检索 / 深读 / 固定证据 / arXiv / 下载 / 索引），回答逐字流式输出。"
             "输入 /help 查看命令。[/cyan]"
         )

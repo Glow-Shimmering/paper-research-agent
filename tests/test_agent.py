@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from paper_agent.agent import (
+from pragent.agent import (
     AgentBudget,
     AgentBudgetExceeded,
     AgentRuntime,
@@ -16,7 +16,7 @@ from paper_agent.agent import (
     validate_run_transition,
     verify_citations,
 )
-from paper_agent.llm import _response_metadata
+from pragent.llm import _response_metadata
 
 
 def make_runtime(**budget_values):

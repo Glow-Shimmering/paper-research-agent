@@ -9,11 +9,11 @@ from pathlib import Path
 
 import fitz
 
-from paper_agent import config
-from paper_agent.embeddings import Embedder
-from paper_agent.indexer import index_library
-from paper_agent.search import hybrid_search
-from paper_agent.store import Store
+from pragent import config
+from pragent.embeddings import Embedder
+from pragent.indexer import index_library
+from pragent.search import hybrid_search
+from pragent.store import Store
 
 
 def _make_pdf(path: Path) -> None:

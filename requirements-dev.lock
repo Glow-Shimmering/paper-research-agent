@@ -1,5 +1,5 @@
-# Fully resolved dependency versions from the Windows/Python 3.11 environment
-# used for the v0.4 reliability pass. This file is consumed as constraints so
+# Fully resolved dependency versions inherited from the Pagent v0.7 baseline
+# and revalidated for the PRAgent v0.1.0 derivation on Python 3.11. This file is consumed as constraints so
 # pyproject.toml remains the source of install requirements:
 #   python -m pip install -c requirements-dev.lock -e ".[dev]"
 annotated-doc==0.0.5

@@ -3,11 +3,11 @@ from importlib import resources
 import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
-from paper_agent import config
-from paper_agent.llm import LLMError
-from paper_agent.models import Chunk
-from paper_agent.store import Store
-from paper_agent.webapp import create_app, serve
+from pragent import config
+from pragent.llm import LLMError
+from pragent.models import Chunk
+from pragent.store import Store
+from pragent.webapp import create_app, serve
 
 from helpers import FakeEmbedder, make_paper
 
@@ -19,7 +19,7 @@ def TestClient(app, **kwargs):
 
 
 def test_web_assets_are_installed_package_resources():
-    web_dir = resources.files("paper_agent").joinpath("web")
+    web_dir = resources.files("pragent").joinpath("web")
 
     assert web_dir.is_dir()
     assert web_dir.joinpath("index.html").is_file()
@@ -70,8 +70,8 @@ def test_api_key_protects_api_but_not_static_page(tmp_path):
     )
     assert client.get("/").status_code == 200
     assert client.get("/api/status").status_code == 401
-    assert client.get("/api/status", headers={"X-Paper-Agent-Key": "wrong"}).status_code == 401
-    ok = client.get("/api/status", headers={"X-Paper-Agent-Key": "secret"})
+    assert client.get("/api/status", headers={"X-PRA-Key": "wrong"}).status_code == 401
+    ok = client.get("/api/status", headers={"X-PRA-Key": "secret"})
     assert ok.status_code == 200
 
 
@@ -79,7 +79,7 @@ def test_unkeyed_api_rejects_non_loopback_host(tmp_path):
     s = make_env(tmp_path)
     client = FastAPITestClient(
         create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM(), api_key=""),
-        base_url="http://paper-agent.example",
+        base_url="http://pragent.example",
     )
 
     assert client.get("/").status_code == 200
@@ -182,8 +182,8 @@ def test_ask_ok(tmp_path):
 
 
 def test_ask_with_web(tmp_path, monkeypatch):
-    import paper_agent.answer as answer_mod
-    from paper_agent.websearch import WebPaper
+    import pragent.answer as answer_mod
+    from pragent.websearch import WebPaper
 
     monkeypatch.setattr(
         answer_mod,
@@ -209,8 +209,8 @@ def test_ask_with_web(tmp_path, monkeypatch):
 
 
 def test_ask_web_error_502(tmp_path, monkeypatch):
-    import paper_agent.answer as answer_mod
-    from paper_agent.websearch import WebSearchError
+    import pragent.answer as answer_mod
+    from pragent.websearch import WebSearchError
 
     def boom(q, limit):
         raise WebSearchError("arXiv 请求失败：超时")
@@ -280,12 +280,12 @@ def test_index_page(tmp_path):
     r = client.get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    assert "Pagent" in r.text
+    assert "PRAgent" in r.text
 
 
 def test_websearch_endpoint(monkeypatch, tmp_path):
-    import paper_agent.webapp as webapp_mod
-    from paper_agent.websearch import WebPaper
+    import pragent.webapp as webapp_mod
+    from pragent.websearch import WebPaper
 
     monkeypatch.setattr(
         webapp_mod,
@@ -316,8 +316,8 @@ def test_websearch_empty_400(tmp_path):
 
 
 def test_websearch_error_502(monkeypatch, tmp_path):
-    import paper_agent.webapp as webapp_mod
-    from paper_agent.websearch import WebSearchError
+    import pragent.webapp as webapp_mod
+    from pragent.websearch import WebSearchError
 
     def boom(q, limit):
         raise WebSearchError("arXiv 请求失败：超时")

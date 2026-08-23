@@ -17,14 +17,14 @@ document.querySelectorAll(".tab").forEach(function (btn) {
 async function api(url, opts, retried) {
   const request = Object.assign({}, opts || {});
   const headers = new Headers(request.headers || {});
-  const apiKey = sessionStorage.getItem("paper-agent-api-key");
-  if (apiKey) headers.set("X-Paper-Agent-Key", apiKey);
+  const apiKey = sessionStorage.getItem("pragent-api-key");
+  if (apiKey) headers.set("X-PRA-Key", apiKey);
   request.headers = headers;
   const resp = await fetch(url, request);
   if (resp.status === 401 && !retried) {
-    const entered = window.prompt("此 Pagent 服务需要 API key：");
+    const entered = window.prompt("此 PRAgent 服务需要 API key：");
     if (entered) {
-      sessionStorage.setItem("paper-agent-api-key", entered);
+      sessionStorage.setItem("pragent-api-key", entered);
       return api(url, opts, true);
     }
   }
@@ -39,14 +39,14 @@ async function api(url, opts, retried) {
 async function apiStream(url, opts, onEvent, retried) {
   const request = Object.assign({}, opts || {});
   const headers = new Headers(request.headers || {});
-  const apiKey = sessionStorage.getItem("paper-agent-api-key");
-  if (apiKey) headers.set("X-Paper-Agent-Key", apiKey);
+  const apiKey = sessionStorage.getItem("pragent-api-key");
+  if (apiKey) headers.set("X-PRA-Key", apiKey);
   request.headers = headers;
   const resp = await fetch(url, request);
   if (resp.status === 401 && !retried) {
-    const entered = window.prompt("此 Pagent 服务需要 API key：");
+    const entered = window.prompt("此 PRAgent 服务需要 API key：");
     if (entered) {
-      sessionStorage.setItem("paper-agent-api-key", entered);
+      sessionStorage.setItem("pragent-api-key", entered);
       return apiStream(url, opts, onEvent, true);
     }
   }
@@ -245,7 +245,7 @@ function renderAskSources(el, sources) {
 
 function renderRetrievalOnly(hintEl, sourcesEl, data) {
   hintEl.classList.remove("hidden");
-  addText(hintEl, "未配置 PAPER_LLM_API_KEY，仅显示检索结果；配置后获得生成式回答。");
+  addText(hintEl, "未配置 PRA_LLM_API_KEY，仅显示检索结果；配置后获得生成式回答。");
   renderHits(sourcesEl, data.hits || []);
   if (data.web_papers && data.web_papers.length) {
     const head = document.createElement("div");
@@ -295,7 +295,7 @@ async function runAsk() {
     phase = next;
     if (next !== "thinking") clearInterval(ticker);
   }
-  console.info("[pagent] ask/stream start:", q.slice(0, 40));
+  console.info("[pra] ask/stream start:", q.slice(0, 40));
 
   let gotAnyEvent = false;
   let context = null;
@@ -317,7 +317,7 @@ async function runAsk() {
           context = event;
           setPhase("streaming");
           if (event.retrieval_only) {
-            console.info("[pagent] retrieval_only");
+            console.info("[pra] retrieval_only");
             clear(answerEl);
             setStatus("未配置 LLM，仅展示检索结果");
           } else {
@@ -328,7 +328,7 @@ async function runAsk() {
           answerEl.textContent = acc;
           setStatus("正在生成回答…（已收到 " + frameCount + " 帧）");
         } else if (event.type === "complete") {
-          console.info("[pagent] complete, verification=", event.verification);
+          console.info("[pra] complete, verification=", event.verification);
           setPhase("done");
           setStatus("完成（共 " + frameCount + " 帧，用时 " + Math.round((Date.now() - startedAt) / 1000) + " 秒）");
           if (event.verification && !event.verification.ok) {
@@ -340,9 +340,9 @@ async function runAsk() {
         }
       }
     );
-    console.info("[pagent] stream finished, frames=", frameCount);
+    console.info("[pra] stream finished, frames=", frameCount);
   } catch (err) {
-    console.warn("[pagent] stream failed:", err);
+    console.warn("[pra] stream failed:", err);
     streamErr = err.message;
   }
 
@@ -457,18 +457,18 @@ function hide(el) { el.classList.add("hidden"); }
 function unhide(el) { el.classList.remove("hidden"); }
 
 function agentSessionId() {
-  let id = sessionStorage.getItem("pagent-agent-session");
+  let id = sessionStorage.getItem("pra-agent-session");
   if (!id) {
     id = (window.crypto && crypto.randomUUID)
       ? crypto.randomUUID()
       : "s-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-    sessionStorage.setItem("pagent-agent-session", id);
+    sessionStorage.setItem("pra-agent-session", id);
   }
   return id;
 }
 
 function newAgentSession() {
-  sessionStorage.removeItem("pagent-agent-session");
+  sessionStorage.removeItem("pra-agent-session");
   clear($("#agent-flow"));
   hide($("#agent-pending"));
   clear($("#agent-pending"));

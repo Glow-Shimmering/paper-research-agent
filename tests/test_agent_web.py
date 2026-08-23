@@ -2,10 +2,10 @@
 import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
-from paper_agent.store import Store
-from paper_agent.tool_protocol import ToolEffect, ToolResult, ToolSpec
-from paper_agent.tools import register_tool, unregister_tool
-from paper_agent.webapp import create_app
+from pragent.store import Store
+from pragent.tool_protocol import ToolEffect, ToolResult, ToolSpec
+from pragent.tools import register_tool, unregister_tool
+from pragent.webapp import create_app
 
 from helpers import FakeEmbedder, StreamingScriptLLM
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from paper_agent.agent_eval import (
+from pragent.agent_eval import (
     AgentScenario,
     SCENARIO_SCHEMA_VERSION,
     ScenarioFormatError,
@@ -11,7 +11,7 @@ from paper_agent.agent_eval import (
     load_scenarios,
     run_scenario,
 )
-from paper_agent.agent import AgentBudget
+from pragent.agent import AgentBudget
 
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"

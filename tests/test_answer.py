@@ -1,10 +1,10 @@
 import pytest
 
-from paper_agent.answer import ask
-from paper_agent.llm import LLMError, refine_metadata
-from paper_agent.models import Chunk
-from paper_agent.store import Store
-from paper_agent.websearch import WebPaper, WebSearchError
+from pragent.answer import ask
+from pragent.llm import LLMError, refine_metadata
+from pragent.models import Chunk
+from pragent.store import Store
+from pragent.websearch import WebPaper, WebSearchError
 
 from helpers import FakeEmbedder, make_paper
 
@@ -75,7 +75,7 @@ def test_ask_full_flow(tmp_path):
 
 
 def test_ask_web_flow(tmp_path, monkeypatch):
-    import paper_agent.answer as answer_mod
+    import pragent.answer as answer_mod
 
     monkeypatch.setattr(answer_mod, "search_papers", lambda q, limit: fake_web_papers())
     s, emb = seed(tmp_path, ["注意力机制的提出背景与动机。"])
@@ -96,7 +96,7 @@ def test_ask_web_flow(tmp_path, monkeypatch):
 
 def test_ask_catalog_question_uses_catalog(tmp_path, monkeypatch):
     """库藏类问题：正文命中为空时仍可用论文库目录回答。"""
-    import paper_agent.answer as answer_mod
+    import pragent.answer as answer_mod
 
     monkeypatch.setattr(answer_mod, "hybrid_search", lambda *a, **k: [])
     s, emb = seed(tmp_path, ["正文内容。"])
@@ -112,7 +112,7 @@ def test_ask_catalog_question_uses_catalog(tmp_path, monkeypatch):
 
 
 def test_ask_web_only_no_local_hits(tmp_path, monkeypatch):
-    import paper_agent.answer as answer_mod
+    import pragent.answer as answer_mod
 
     monkeypatch.setattr(answer_mod, "search_papers", lambda q, limit: fake_web_papers())
     s = Store(tmp_path / "t.db")  # 空库
@@ -124,7 +124,7 @@ def test_ask_web_only_no_local_hits(tmp_path, monkeypatch):
 
 
 def test_ask_web_error_raised(tmp_path, monkeypatch):
-    import paper_agent.answer as answer_mod
+    import pragent.answer as answer_mod
 
     def boom(q, limit):
         raise WebSearchError("arXiv 请求失败：超时")
@@ -153,7 +153,7 @@ def test_ask_retrieval_only_when_unconfigured(tmp_path):
 
 
 def test_ask_retrieval_only_with_web(tmp_path, monkeypatch):
-    import paper_agent.answer as answer_mod
+    import pragent.answer as answer_mod
 
     monkeypatch.setattr(answer_mod, "search_papers", lambda q, limit: fake_web_papers())
     s, emb = seed(tmp_path, ["内容。"])

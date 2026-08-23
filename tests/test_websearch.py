@@ -4,7 +4,7 @@ import urllib.request
 
 import pytest
 
-from paper_agent.websearch import WebSearchError, search_papers
+from pragent.websearch import WebSearchError, search_papers
 
 SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">

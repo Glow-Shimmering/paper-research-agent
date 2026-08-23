@@ -210,7 +210,7 @@ def _download_paper(
     from .download import DownloadError, download_pdf
     from .indexer import index_pdf
 
-    # 下载目录：显式配置（PAPER_DOWNLOAD_DIR / PAPER_DATA_DIR）优先，否则论文库目录
+    # 下载目录：显式配置（PRA_DOWNLOAD_DIR / PRA_DATA_DIR）优先，否则论文库目录
     target_dir = (
         Path(_confirmed_target_dir).expanduser().resolve()
         if _confirmed_target_dir
@@ -220,8 +220,8 @@ def _download_paper(
         return ToolResult.error(
             "download_dir_missing",
             (
-                "未配置下载目录：请在 .env 设置 PAPER_DOWNLOAD_DIR（或 PAPER_DATA_DIR），"
-                "或先运行 paper index <论文目录> 建立论文库。"
+                "未配置下载目录：请在 .env 设置 PRA_DOWNLOAD_DIR（或 PRA_DATA_DIR），"
+                "或先运行 pra index <论文目录> 建立论文库。"
             ),
         )
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -269,7 +269,7 @@ def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> ToolResult:
     if library_root is None:
         return ToolResult.error(
             "library_missing",
-            "尚未建立论文库；请先在终端运行 paper index <论文目录>。",
+            "尚未建立论文库；请先在终端运行 pra index <论文目录>。",
         )
     target = Path(dir) if dir else library_root
     try:
@@ -281,7 +281,7 @@ def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> ToolResult:
             "library_switch_refused",
             (
                 f"拒绝通过 Agent 切换论文库目录：{target}。"
-                "如需切换，请在终端显式运行 paper index <目录> --force。"
+                "如需切换，请在终端显式运行 pra index <目录> --force。"
             ),
         )
     try:
@@ -477,13 +477,13 @@ def _read_pages(
     except OSError as exc:
         return ToolResult.error(
             "paper_source_unavailable",
-            f"无法读取索引论文文件：{exc}。请确认文件可访问后重新运行 paper index。",
+            f"无法读取索引论文文件：{exc}。请确认文件可访问后重新运行 pra index。",
         )
     indexed_sha256 = str(_value(paper, "sha256", default=""))
     if current_sha256 != indexed_sha256:
         return ToolResult.error(
             "paper_source_changed",
-            "论文文件已在索引后发生变化；为避免文本与证据引用不一致，请重新运行 paper index 后重试。",
+            "论文文件已在索引后发生变化；为避免文本与证据引用不一致，请重新运行 pra index 后重试。",
         )
     try:
         pages, _ = extract_pdf(paper_path)

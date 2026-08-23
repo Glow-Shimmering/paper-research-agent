@@ -4,10 +4,10 @@ import threading
 import numpy as np
 import pytest
 
-import paper_agent.search as search_module
-from paper_agent.models import Chunk, Paper
-from paper_agent.search import hybrid_search, rrf_fuse, search_within_paper
-from paper_agent.store import Store
+import pragent.search as search_module
+from pragent.models import Chunk, Paper
+from pragent.search import hybrid_search, rrf_fuse, search_within_paper
+from pragent.store import Store
 
 
 class FakeEmbedder:

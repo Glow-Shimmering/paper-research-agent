@@ -4,7 +4,7 @@ import urllib.request
 import fitz
 import pytest
 
-from paper_agent.download import DownloadError, arxiv_id_from_url, download_pdf
+from pragent.download import DownloadError, arxiv_id_from_url, download_pdf
 
 
 def test_arxiv_id_extract():

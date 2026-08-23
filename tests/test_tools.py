@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-from paper_agent.store import Store
-from paper_agent.tool_protocol import ToolEffect, ToolResult, ToolSpec, ToolValidationError
-from paper_agent.tools import (
+from pragent.store import Store
+from pragent.tool_protocol import ToolEffect, ToolResult, ToolSpec, ToolValidationError
+from pragent.tools import (
     CONFIRMATION_TOOLS,
     EXTERNAL_TOOLS,
     MUTATING_TOOLS,
@@ -26,7 +26,7 @@ class FakeLLM:
 def make_ctx(tmp_path, library_dir=None):
     s = Store(tmp_path / "t.db")
     pid = s.upsert_paper(make_paper("a.pdf", title="注意力机制研究", authors=["张三"], year=2023))
-    from paper_agent.models import Chunk
+    from pragent.models import Chunk
     from helpers import FakeEmbedder as FE
 
     s.replace_chunks(
@@ -47,7 +47,7 @@ def make_ctx(tmp_path, library_dir=None):
 
 
 def test_tools_schema_complete():
-    from paper_agent.tools import SCHEMA_NAMES
+    from pragent.tools import SCHEMA_NAMES
 
     names = [t["function"]["name"] for t in TOOLS]
     assert set(names) == SCHEMA_NAMES == {
@@ -64,7 +64,7 @@ def test_tools_schema_complete():
 
 
 def test_tool_effect_sets_are_derived_from_specs():
-    import paper_agent.tools as tools_module
+    import pragent.tools as tools_module
 
     assert all(
         spec.effects
@@ -85,7 +85,7 @@ def test_tool_effect_sets_are_derived_from_specs():
 
 
 def test_local_search(tmp_path):
-    from paper_agent.tools import ToolContext
+    from pragent.tools import ToolContext
 
     ctx = make_ctx(tmp_path)
     out = execute_tool("local_search", {"query": "注意力机制"}, ctx)
@@ -94,7 +94,7 @@ def test_local_search(tmp_path):
 
 
 def test_local_search_no_hits(tmp_path):
-    from paper_agent.tools import ToolContext
+    from pragent.tools import ToolContext
 
     s = Store(tmp_path / "t.db")  # 空库：混合检索无命中
     ctx = ToolContext(store=s, embedder=FakeEmbedder(), llm=FakeLLM())
@@ -103,8 +103,8 @@ def test_local_search_no_hits(tmp_path):
 
 
 def test_web_search(monkeypatch, tmp_path):
-    from paper_agent import websearch as ws_mod
-    from paper_agent.tools import ToolContext
+    from pragent import websearch as ws_mod
+    from pragent.tools import ToolContext
 
     monkeypatch.setattr(
         ws_mod,
@@ -122,8 +122,8 @@ def test_web_search(monkeypatch, tmp_path):
 
 
 def test_web_search_failure(monkeypatch, tmp_path):
-    from paper_agent import websearch as ws_mod
-    from paper_agent.tools import ToolContext
+    from pragent import websearch as ws_mod
+    from pragent.tools import ToolContext
 
     def boom(q, limit):
         raise ws_mod.WebSearchError("超时")
@@ -137,8 +137,8 @@ def test_web_search_failure(monkeypatch, tmp_path):
 
 
 def test_web_search_requires_confirmation_before_external_request(monkeypatch, tmp_path):
-    from paper_agent import websearch as ws_mod
-    from paper_agent.tools import confirm_pending_action
+    from pragent import websearch as ws_mod
+    from pragent.tools import confirm_pending_action
 
     calls = []
     monkeypatch.setattr(ws_mod, "search_papers", lambda q, limit: calls.append(q) or [])
@@ -155,8 +155,8 @@ def test_web_search_requires_confirmation_before_external_request(monkeypatch, t
 
 
 def test_download_paper(monkeypatch, tmp_path):
-    from paper_agent import download as dl_mod
-    from paper_agent.tools import ToolContext
+    from pragent import download as dl_mod
+    from pragent.tools import ToolContext
 
     pdf_bytes = b"%PDF-1.7 fake " * 50
 
@@ -172,8 +172,8 @@ def test_download_paper(monkeypatch, tmp_path):
         indexed.append((path, kwargs))
         return {"added": 1, "updated": 0, "unchanged": 0, "failed": 0}
 
-    monkeypatch.setattr("paper_agent.indexer.index_pdf", fake_index_pdf)
-    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
+    monkeypatch.setattr("pragent.indexer.index_pdf", fake_index_pdf)
+    monkeypatch.setattr("pragent.config.download_dir_override", lambda: None)
     ctx = make_ctx(tmp_path, library_dir=tmp_path / "lib")
     (tmp_path / "lib").mkdir()
     out = execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
@@ -185,8 +185,8 @@ def test_download_paper(monkeypatch, tmp_path):
 
 def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
     """显式配置目录优先于论文库目录。"""
-    from paper_agent import download as dl_mod
-    from paper_agent.tools import ToolContext
+    from pragent import download as dl_mod
+    from pragent.tools import ToolContext
 
     override = tmp_path / "override"
     pdf_bytes = b"%PDF-1.7 fake " * 50
@@ -198,12 +198,12 @@ def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dl_mod, "download_pdf", fake_download)
     monkeypatch.setattr(
-        "paper_agent.indexer.index_pdf",
+        "pragent.indexer.index_pdf",
         lambda store, path, embedder, **kw: {
             "added": 1, "updated": 0, "unchanged": 0, "failed": 0
         },
     )
-    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: override)
+    monkeypatch.setattr("pragent.config.download_dir_override", lambda: override)
     lib = tmp_path / "lib"
     lib.mkdir()
     ctx = make_ctx(tmp_path, library_dir=lib)
@@ -213,7 +213,7 @@ def test_download_paper_override_dir_priority(monkeypatch, tmp_path):
 
 
 def test_download_paper_no_library(monkeypatch, tmp_path):
-    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
+    monkeypatch.setattr("pragent.config.download_dir_override", lambda: None)
     ctx = make_ctx(tmp_path)  # 无 library_dir
     result = execute_tool_result(
         "download_paper",
@@ -221,7 +221,7 @@ def test_download_paper_no_library(monkeypatch, tmp_path):
         ctx,
     )
     assert result.ok is False and result.code == "download_dir_missing"
-    assert "未配置下载目录" in result.message and "PAPER_DOWNLOAD_DIR" in result.message
+    assert "未配置下载目录" in result.message and "PRA_DOWNLOAD_DIR" in result.message
 
 
 def test_index_missing_library_is_a_structured_failure(tmp_path):
@@ -233,9 +233,9 @@ def test_index_missing_library_is_a_structured_failure(tmp_path):
 
 
 def test_download_confirmation_freezes_and_displays_target_directory(monkeypatch, tmp_path):
-    from paper_agent.tools import pending_action_description
+    from pragent.tools import pending_action_description
 
-    monkeypatch.setattr("paper_agent.config.download_dir_override", lambda: None)
+    monkeypatch.setattr("pragent.config.download_dir_override", lambda: None)
     library = tmp_path / "lib"
     library.mkdir()
     ctx = make_ctx(tmp_path, library_dir=library)
@@ -270,7 +270,7 @@ def test_unknown_tool(tmp_path):
 
 def test_save_note_creates_dir_and_file(monkeypatch, tmp_path):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     ctx = make_ctx(tmp_path)
     out = execute_tool("save_note", {"filename": "总结.md", "content": "这是一篇总结"}, ctx)
     assert "已保存" in out and "总结.md" in out
@@ -279,7 +279,7 @@ def test_save_note_creates_dir_and_file(monkeypatch, tmp_path):
 
 def test_save_note_no_overwrite(monkeypatch, tmp_path):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     notes.mkdir()
     (notes / "a.md").write_text("v1", encoding="utf-8")
     ctx = make_ctx(tmp_path)
@@ -291,7 +291,7 @@ def test_save_note_no_overwrite(monkeypatch, tmp_path):
 
 def test_save_note_path_traversal_blocked(monkeypatch, tmp_path):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     ctx = make_ctx(tmp_path)
     out = execute_tool("save_note", {"filename": "../../../evil.md", "content": "x"}, ctx)
     assert "已保存" in out
@@ -304,7 +304,7 @@ def test_save_note_path_traversal_blocked(monkeypatch, tmp_path):
 
 def test_save_note_invalid_chars(monkeypatch, tmp_path):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     ctx = make_ctx(tmp_path)
     out = execute_tool("save_note", {"filename": "a|b?c*.md", "content": "x"}, ctx)
     assert "已保存" in out
@@ -313,7 +313,7 @@ def test_save_note_invalid_chars(monkeypatch, tmp_path):
 
 def test_list_notes(monkeypatch, tmp_path):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     notes.mkdir()
     (notes / "n1.md").write_text("12345", encoding="utf-8")
     ctx = make_ctx(tmp_path)
@@ -323,7 +323,7 @@ def test_list_notes(monkeypatch, tmp_path):
     (notes / "n1.md").unlink()
     assert "空" in execute_tool("list_notes", {}, ctx)
     # 不存在
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: tmp_path / "nope")
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: tmp_path / "nope")
     assert "不存在" in execute_tool("list_notes", {}, ctx)
 
 
@@ -334,10 +334,10 @@ def test_tool_error_returns_text(tmp_path):
 
 
 def test_mutating_tool_requires_exact_user_confirmation(monkeypatch, tmp_path):
-    from paper_agent.tools import confirm_pending_action
+    from pragent.tools import confirm_pending_action
 
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     ctx = make_ctx(tmp_path)
     ctx.require_confirmation = True
 
@@ -358,7 +358,7 @@ def test_unclassified_tools_are_rejected_by_registration_and_execution(
     monkeypatch,
     tmp_path,
 ):
-    import paper_agent.tools as tools_module
+    import pragent.tools as tools_module
 
     with pytest.raises(ToolValidationError, match="effects 不能为空"):
         ToolSpec(
@@ -394,10 +394,10 @@ def test_tool_arguments_are_strictly_validated(tmp_path, args, expected):
 
 
 def test_confirmation_ticket_binds_action_parameters_and_runtime_ids(monkeypatch, tmp_path):
-    from paper_agent.tools import confirm_pending_action
+    from pragent.tools import confirm_pending_action
 
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     ctx = make_ctx(tmp_path)
     ctx.require_confirmation = True
 
@@ -436,11 +436,11 @@ def test_confirmation_ticket_binds_action_parameters_and_runtime_ids(monkeypatch
 
 
 def test_confirmation_detects_pending_parameter_tampering(monkeypatch, tmp_path):
-    from paper_agent.tool_protocol import PendingAction
-    from paper_agent.tools import confirm_pending_action
+    from pragent.tool_protocol import PendingAction
+    from pragent.tools import confirm_pending_action
 
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     ctx = make_ctx(tmp_path)
     ctx.require_confirmation = True
     execute_tool("save_note", {"filename": "safe.md", "content": "v1"}, ctx)
@@ -507,10 +507,10 @@ def test_local_and_deep_reading_tools_return_stable_evidence_ids(
     assert listed.ok and listed.data[0]["evidence_id"] == evidence_id
 
     monkeypatch.setattr(
-        "paper_agent.pdf.extract_pdf",
+        "pragent.pdf.extract_pdf",
         lambda path: (["第一页正文", "第二页正文"], {}),
     )
-    monkeypatch.setattr("paper_agent.tools._sha256_file", lambda path: paper.sha256)
+    monkeypatch.setattr("pragent.tools._sha256_file", lambda path: paper.sha256)
     pages = execute_tool_result(
         "read_pages",
         {"paper_id": paper.id, "start_page": 1, "end_page": 2},
@@ -522,7 +522,7 @@ def test_local_and_deep_reading_tools_return_stable_evidence_ids(
 
 
 def test_stale_evidence_is_returned_for_audit_but_not_citable(tmp_path):
-    from paper_agent.models import Chunk
+    from pragent.models import Chunk
 
     ctx = make_ctx(tmp_path)
     paper = ctx.store.paper_by_path("a.pdf")
@@ -548,7 +548,7 @@ def test_stale_evidence_is_returned_for_audit_but_not_citable(tmp_path):
 
 
 def test_read_pages_rejects_pdf_changed_after_indexing(tmp_path, monkeypatch):
-    from paper_agent.models import Chunk
+    from pragent.models import Chunk
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"indexed-version")
@@ -565,7 +565,7 @@ def test_read_pages_rejects_pdf_changed_after_indexing(tmp_path, monkeypatch):
     ctx.store.replace_chunks(paper_id, [Chunk(None, paper_id, 0, 1, "索引文本")])
     pdf_path.write_bytes(b"changed-version")
     monkeypatch.setattr(
-        "paper_agent.pdf.extract_pdf",
+        "pragent.pdf.extract_pdf",
         lambda path: pytest.fail("哈希不匹配时不应读取 PDF"),
     )
 
@@ -575,7 +575,7 @@ def test_read_pages_rejects_pdf_changed_after_indexing(tmp_path, monkeypatch):
 
     assert result.ok is False
     assert result.code == "paper_source_changed"
-    assert "重新运行 paper index" in result.message
+    assert "重新运行 pra index" in result.message
 
 
 def test_evidence_id_schema_is_a_stable_string_contract(tmp_path):

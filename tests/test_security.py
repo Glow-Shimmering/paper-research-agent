@@ -1,4 +1,4 @@
-from paper_agent.security import api_key_matches, is_loopback_host, origin_matches_request
+from pragent.security import api_key_matches, is_loopback_host, origin_matches_request
 
 
 def test_loopback_detection_is_fail_closed():
@@ -8,7 +8,7 @@ def test_loopback_detection_is_fail_closed():
     assert is_loopback_host("localhost")
     assert not is_loopback_host("0.0.0.0")
     assert not is_loopback_host("::")
-    assert not is_loopback_host("paper-agent.local")
+    assert not is_loopback_host("pragent.local")
 
 
 def test_api_key_comparison_requires_non_empty_expected_key():

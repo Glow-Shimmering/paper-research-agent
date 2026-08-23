@@ -1,6 +1,6 @@
 """配置：环境变量 + 可发现的 ``.env`` 文件。
 
-查找顺序：``PAPER_ENV_FILE`` 显式路径、当前工作目录的 ``.env``、
+查找顺序：``PRA_ENV_FILE`` 显式路径、当前工作目录的 ``.env``、
 editable 源码仓库根目录的 ``.env``。非空环境变量优先；环境变量缺失或
 为空时才使用文件值（部分宿主环境会注入空值变量）。
 """
@@ -37,36 +37,32 @@ def _find_env_file(explicit: Optional[str], cwd: Path, module_file: Path) -> Opt
     return None
 
 
-ENV_FILE = _find_env_file(os.getenv("PAPER_ENV_FILE"), Path.cwd(), Path(__file__))
+ENV_FILE = _find_env_file(os.getenv("PRA_ENV_FILE"), Path.cwd(), Path(__file__))
 
 for _k, _v in (dotenv_values(ENV_FILE) if ENV_FILE else {}).items():
     if _v is not None and (_k not in os.environ or not os.environ[_k]):
         os.environ[_k] = _v
 
 def _default_library_dir() -> Path:
-    """数据目录：优先 ``~/.pagent``；存在旧版 ``~/.paper-agent`` 时无缝沿用。"""
-    home = Path.home()
-    legacy = home / ".paper-agent"
-    if legacy.is_dir():
-        return legacy
-    return home / ".pagent"
+    """PRAgent 使用独立数据目录；旧 Pagent 数据只能显式导入。"""
+    return Path.home() / ".pragent"
 
 
-LIBRARY_DIR = Path(_env_or_default("PAPER_DATA_DIR", str(_default_library_dir())))
+LIBRARY_DIR = Path(_env_or_default("PRA_DATA_DIR", str(_default_library_dir())))
 DB_PATH = LIBRARY_DIR / "library.db"
-LLM_BASE_URL = _env_or_default("PAPER_LLM_BASE_URL", "https://api.deepseek.com")
-LLM_API_KEY = os.getenv("PAPER_LLM_API_KEY", "")
-LLM_MODEL = _env_or_default("PAPER_LLM_MODEL", "deepseek-chat")
-WEB_API_KEY = os.getenv("PAPER_WEB_API_KEY", "")
-EMBED_MODEL = _env_or_default("PAPER_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
+LLM_BASE_URL = _env_or_default("PRA_LLM_BASE_URL", "https://api.deepseek.com")
+LLM_API_KEY = os.getenv("PRA_LLM_API_KEY", "")
+LLM_MODEL = _env_or_default("PRA_LLM_MODEL", "deepseek-chat")
+WEB_API_KEY = os.getenv("PRA_WEB_API_KEY", "")
+EMBED_MODEL = _env_or_default("PRA_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
 
 
 def download_dir_override() -> Optional[Path]:
-    """下载论文的显式目录：PAPER_DOWNLOAD_DIR > PAPER_DATA_DIR；都未显式设置返回 None。
+    """下载论文的显式目录：PRA_DOWNLOAD_DIR > PRA_DATA_DIR；都未显式设置返回 None。
 
     仅接受显式设置（env 中存在即生效），避免默认值目录被误用作下载目标。
     """
-    for key in ("PAPER_DOWNLOAD_DIR", "PAPER_DATA_DIR"):
+    for key in ("PRA_DOWNLOAD_DIR", "PRA_DATA_DIR"):
         raw = os.getenv(key)
         if raw:
             return Path(raw).resolve()
@@ -74,8 +70,8 @@ def download_dir_override() -> Optional[Path]:
 
 
 def notes_dir() -> Path:
-    """笔记保存目录：PAPER_NOTE_DIR 显式设置优先，否则 PAPER_DATA_DIR 下 notes。"""
-    raw = os.getenv("PAPER_NOTE_DIR")
+    """笔记保存目录：PRA_NOTE_DIR 显式设置优先，否则 PRA_DATA_DIR 下 notes。"""
+    raw = os.getenv("PRA_NOTE_DIR")
     if raw:
         return Path(raw).resolve()
     return LIBRARY_DIR / "notes"

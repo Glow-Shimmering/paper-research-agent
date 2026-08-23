@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from paper_agent.pdf import extract_pdf, guess_metadata
+from pragent.pdf import extract_pdf, guess_metadata
 
 from helpers import make_pdf
 

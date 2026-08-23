@@ -9,7 +9,7 @@ from typing import Optional
 import fitz
 
 _ARXIV_ID_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)")
-_UA = {"User-Agent": "Pagent/0.6 (paper research assistant)"}
+_UA = {"User-Agent": "PRAgent/0.1 (paper research assistant)"}
 _MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
 
 

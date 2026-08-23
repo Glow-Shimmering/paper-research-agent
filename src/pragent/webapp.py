@@ -25,9 +25,9 @@ from .websearch import WebSearchError, search_papers
 
 def _web_directory() -> str:
     """返回随 Python 包安装的 Web 静态资源目录。"""
-    web_dir = resources.files("paper_agent").joinpath("web")
+    web_dir = resources.files("pragent").joinpath("web")
     if not web_dir.is_dir():
-        raise RuntimeError("Pagent 安装不完整：缺少 Web 静态资源")
+        raise RuntimeError("PRAgent 安装不完整：缺少 Web 静态资源")
     return str(web_dir)
 
 
@@ -110,7 +110,7 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                 owned_llm = LLMClient(config.LLM_BASE_URL, config.LLM_API_KEY, config.LLM_MODEL)
             return owned_llm
 
-    app = FastAPI(title="Pagent", lifespan=lifespan)
+    app = FastAPI(title="PRAgent", lifespan=lifespan)
 
     @app.middleware("http")
     async def protect_api(request: Request, call_next):
@@ -140,7 +140,7 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                 except ValueError:
                     return JSONResponse(status_code=400, content={"detail": "Content-Length 无效"})
             if expected_api_key and not api_key_matches(
-                request.headers.get("x-paper-agent-key"), expected_api_key
+                request.headers.get("x-pra-key"), expected_api_key
             ):
                 return JSONResponse(status_code=401, content={"detail": "需要有效的 Paper Agent API key"})
             if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -315,7 +315,7 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
         s = _store()
         lib_dir = s.meta_get("library_dir")
         if not lib_dir or not Path(lib_dir).is_dir():
-            raise HTTPException(status_code=400, detail="尚未索引任何目录，请先运行 paper index <目录>")
+            raise HTTPException(status_code=400, detail="尚未索引任何目录，请先运行 pra index <目录>")
         def reindex_locked():
             with reindex_lock:
                 return index_library(
@@ -361,7 +361,7 @@ def serve(
     if not is_loopback_host(host):
         if not config.WEB_API_KEY:
             raise RuntimeError(
-                "拒绝无鉴权的非本机监听；请设置 PAPER_WEB_API_KEY，或使用 --host 127.0.0.1"
+                "拒绝无鉴权的非本机监听；请设置 PRA_WEB_API_KEY，或使用 --host 127.0.0.1"
             )
         if not tls_options and not allow_insecure_remote:
             raise RuntimeError(

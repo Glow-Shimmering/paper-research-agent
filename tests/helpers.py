@@ -5,7 +5,7 @@ from pathlib import Path
 import fitz
 import numpy as np
 
-from paper_agent.models import Paper
+from pragent.models import Paper
 
 
 def make_pdf(path: Path, pages: list[str], meta: dict | None = None) -> Path:

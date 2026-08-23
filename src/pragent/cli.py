@@ -1,4 +1,4 @@
-"""pagent 命令行入口。"""
+"""pra 命令行入口。"""
 import json as _json
 import sys
 from pathlib import Path
@@ -36,12 +36,12 @@ def _configure_stdio_utf8() -> None:
 
 _configure_stdio_utf8()
 
-app = typer.Typer(help="Pagent：论文整理与检索 Agent——索引本地 PDF 论文库，提供检索、问答与受控对话。")
+app = typer.Typer(help="PRAgent：论文整理与检索 Agent——索引本地 PDF 论文库，提供检索、问答与受控对话。")
 
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"pagent {__version__}")
+        typer.echo(f"pra {__version__}")
         raise typer.Exit()
 
 
@@ -55,11 +55,11 @@ def main(
         help="显示版本并退出",
     ),
 ):
-    """Pagent 论文整理与检索助手。"""
+    """PRAgent 论文整理与检索助手。"""
 
 
 def _todo(cmd: str) -> None:
-    typer.echo(f"[paper] {cmd} 尚未实现", err=True)
+    typer.echo(f"[pra] {cmd} 尚未实现", err=True)
     raise typer.Exit(1)
 
 
@@ -130,7 +130,7 @@ def list(
         )
         return
     if not papers:
-        typer.echo("库为空。先运行 paper index <目录>。")
+        typer.echo("库为空。先运行 pra index <目录>。")
         return
     for p in papers:
         year = str(p.year) if p.year else "-"
@@ -152,7 +152,7 @@ def status():
     if config.LLM_API_KEY:
         typer.echo(f"LLM：已配置（{config.LLM_MODEL} @ {config.LLM_BASE_URL}）")
     else:
-        typer.echo("LLM：未配置（问答将退回纯检索，设置 PAPER_LLM_API_KEY 启用生成式回答）")
+        typer.echo("LLM：未配置（问答将退回纯检索，设置 PRA_LLM_API_KEY 启用生成式回答）")
 
 
 @app.command()
@@ -324,7 +324,7 @@ def ask(
         _print_ask_sources(sources, web, web_papers)
     else:
         if retrieval_only:
-            typer.echo("未配置 PAPER_LLM_API_KEY（或 --no-llm），仅显示检索结果；配置后获得生成式回答。")
+            typer.echo("未配置 PRA_LLM_API_KEY（或 --no-llm），仅显示检索结果；配置后获得生成式回答。")
         _print_hits(hits)
         _print_web_papers(web_papers)
 
@@ -393,7 +393,7 @@ def chat():
     config.ensure_data_dir()
     llm = LLMClient(config.LLM_BASE_URL, config.LLM_API_KEY, config.LLM_MODEL)
     if not llm.is_configured:
-        typer.echo("错误：未配置 PAPER_LLM_API_KEY，对话模式需要 LLM。", err=True)
+        typer.echo("错误：未配置 PRA_LLM_API_KEY，对话模式需要 LLM。", err=True)
         raise typer.Exit(1)
     store = Store(config.DB_PATH)
     embedder = Embedder(config.EMBED_MODEL)

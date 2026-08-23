@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pagent"
+name = "paper-research-agent"
 dynamic = ["version"]
-description = "Pagent：论文整理与检索 Agent——整理本地论文资料库，提供检索、问答与受控 Agent 对话"
+description = "PRAgent: evidence-first workspace for paper discovery, deep reading, comparison, and writing"
 requires-python = ">=3.10"
 dependencies = [
     "pymupdf>=1.24",
@@ -26,17 +26,16 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [project.scripts]
-pagent = "paper_agent.cli:app"
-paper = "paper_agent.cli:app"
+pra = "pragent.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = {attr = "paper_agent.__version__"}
+version = {attr = "pragent.__version__"}
 
 [tool.setuptools.package-data]
-paper_agent = ["web/*.html", "web/*.css", "web/*.js"]
+pragent = ["web/*.html", "web/*.css", "web/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

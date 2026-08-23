@@ -1,9 +1,9 @@
 import asyncio
 
-from paper_agent.models import Chunk
-from paper_agent.store import Store
-from paper_agent.tools import ToolContext
-from paper_agent.tui import ChatApp
+from pragent.models import Chunk
+from pragent.store import Store
+from pragent.tools import ToolContext
+from pragent.tui import ChatApp
 from textual.widgets import Input, RichLog
 
 from helpers import FakeEmbedder, StreamingScriptLLM, make_paper
@@ -109,7 +109,7 @@ def test_chat_app_clear(tmp_path):
 
 def test_chat_app_confirm_executes_pending_exact_action(tmp_path, monkeypatch):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
 
     async def run():
         ctx = make_ctx(tmp_path)
@@ -135,7 +135,7 @@ def test_chat_app_confirm_executes_pending_exact_action(tmp_path, monkeypatch):
 
 def test_chat_app_confirm_resumes_original_agent_run(tmp_path, monkeypatch):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     llm = FakeLLM(
         [
             {
@@ -193,7 +193,7 @@ def test_chat_app_confirm_resumes_original_agent_run(tmp_path, monkeypatch):
 
 def test_chat_app_cancel_closes_tool_protocol_and_run(tmp_path, monkeypatch):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     llm = FakeLLM(
         [
             {
@@ -325,7 +325,7 @@ def test_chat_app_copy_no_answer(tmp_path, monkeypatch):
 
 def test_chat_app_export(tmp_path, monkeypatch):
     notes = tmp_path / "notes"
-    monkeypatch.setattr("paper_agent.config.notes_dir", lambda: notes)
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
     llm = FakeLLM(
         [
             {"content": None, "tool_calls": [{"id": "c1", "name": "library_status", "arguments": {}}]},

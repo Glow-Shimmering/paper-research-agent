@@ -4,13 +4,13 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient as FastAPITestClient
 from typer.testing import CliRunner
 
-from paper_agent.answer import answer_stream
-from paper_agent.chat import chat_turn
-from paper_agent.llm import LLMClient, LLMError
-from paper_agent.models import Chunk
-from paper_agent.store import Store
-from paper_agent.tools import ToolContext
-from paper_agent.webapp import create_app
+from pragent.answer import answer_stream
+from pragent.chat import chat_turn
+from pragent.llm import LLMClient, LLMError
+from pragent.models import Chunk
+from pragent.store import Store
+from pragent.tools import ToolContext
+from pragent.webapp import create_app
 
 from helpers import FakeEmbedder, StreamFakeLLM, StreamingScriptLLM, make_paper
 
@@ -300,8 +300,8 @@ def test_ask_stream_endpoint_rejects_empty_question(tmp_path):
 
 
 def _patch_cli_deps(monkeypatch):
-    import paper_agent.cli as cli
-    from paper_agent import config as config_mod
+    import pragent.cli as cli
+    from pragent import config as config_mod
 
     monkeypatch.setattr(config_mod, "ensure_data_dir", lambda: None)
     monkeypatch.setattr(cli, "Store", lambda path: object())
@@ -310,7 +310,7 @@ def _patch_cli_deps(monkeypatch):
 
 
 def test_cli_ask_streams_to_console(monkeypatch):
-    import paper_agent.cli as cli
+    import pragent.cli as cli
 
     _patch_cli_deps(monkeypatch)
 
@@ -342,7 +342,7 @@ def test_cli_ask_streams_to_console(monkeypatch):
 
 
 def test_cli_ask_stream_prints_verification_warning(monkeypatch):
-    import paper_agent.cli as cli
+    import pragent.cli as cli
 
     _patch_cli_deps(monkeypatch)
 
@@ -375,7 +375,7 @@ def test_cli_ask_stream_prints_verification_warning(monkeypatch):
 
 
 def test_cli_ask_no_stream_uses_classic_path(monkeypatch):
-    import paper_agent.cli as cli
+    import pragent.cli as cli
 
     _patch_cli_deps(monkeypatch)
     monkeypatch.setattr(

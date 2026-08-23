@@ -4,8 +4,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from paper_agent.models import AgentEventRecord, AgentRunRecord, Chunk, Evidence, Paper
-from paper_agent.store import AgentRunStatusConflictError, RevisionConflictError, Store
+from pragent.models import AgentEventRecord, AgentRunRecord, Chunk, Evidence, Paper
+from pragent.store import AgentRunStatusConflictError, RevisionConflictError, Store
 
 
 def make_paper(path="a.pdf", **kw):

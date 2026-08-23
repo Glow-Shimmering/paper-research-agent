@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from pragent.models import AgentEventRecord, AgentRunRecord, Chunk, Evidence, Paper
+from pragent.storage.migrations import LATEST_SCHEMA_VERSION
 from pragent.store import AgentRunStatusConflictError, RevisionConflictError, Store
 
 
@@ -285,7 +286,7 @@ def test_meta_and_stats(tmp_path):
     s.meta_set("embed_model", "m1")
     assert s.meta_get("embed_model") == "m1"
     assert s.meta_get("nope") is None
-    assert s.meta_get("schema_version") == "2"
+    assert s.meta_get("schema_version") == str(LATEST_SCHEMA_VERSION)
     assert s.stats() == (0, 0)
     s.close()
 
@@ -503,7 +504,7 @@ def test_v1_database_is_migrated_without_losing_index_data(tmp_path):
 
     s = Store(db_path)
 
-    assert s.meta_get("schema_version") == "2"
+    assert s.meta_get("schema_version") == str(LATEST_SCHEMA_VERSION)
     assert s.revision == 7
     assert s.paper_by_id(1).title == "旧论文"
     evidence = s.pin_evidence(s.evidence_from_chunk(1), "迁移后可用")

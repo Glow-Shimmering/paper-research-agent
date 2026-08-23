@@ -21,8 +21,8 @@ from .models import (
     SearchHit,
     SearchSnapshot,
 )
+from .storage.migrations import MigrationReport, migrate_schema
 
-_SCHEMA_VERSION = 2
 _AGENT_RUN_STATUSES = frozenset(
     {
         "proposed",
@@ -34,72 +34,6 @@ _AGENT_RUN_STATUSES = frozenset(
         "blocked",
     }
 )
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS papers (
-    id INTEGER PRIMARY KEY,
-    path TEXT UNIQUE NOT NULL,
-    sha256 TEXT NOT NULL,
-    title TEXT NOT NULL,
-    authors TEXT NOT NULL,
-    year INTEGER,
-    page_count INTEGER NOT NULL,
-    has_text INTEGER NOT NULL,
-    indexed_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS chunks (
-    id INTEGER PRIMARY KEY,
-    paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    page INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    embedding BLOB,
-    UNIQUE(paper_id, seq)
-);
-CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);
-CREATE TABLE IF NOT EXISTS evidence (
-    id TEXT PRIMARY KEY,
-    paper_id INTEGER REFERENCES papers(id) ON DELETE SET NULL,
-    chunk_id INTEGER REFERENCES chunks(id) ON DELETE SET NULL,
-    source_hash TEXT NOT NULL,
-    paper_sha256 TEXT NOT NULL,
-    chunk_text_sha256 TEXT NOT NULL,
-    title TEXT NOT NULL,
-    authors TEXT NOT NULL,
-    year INTEGER,
-    path TEXT NOT NULL,
-    page INTEGER NOT NULL,
-    chunk_seq INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    annotation TEXT NOT NULL DEFAULT '',
-    pinned_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_evidence_pinned_at ON evidence(pinned_at DESC, id);
-CREATE INDEX IF NOT EXISTS idx_evidence_source ON evidence(path, chunk_seq);
-CREATE TABLE IF NOT EXISTS agent_runs (
-    id TEXT PRIMARY KEY,
-    objective TEXT NOT NULL,
-    status TEXT NOT NULL,
-    plan TEXT,
-    budget TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS agent_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    event_type TEXT NOT NULL,
-    payload TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE(run_id, seq)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_events_run_seq ON agent_events(run_id, seq);
-"""
 
 
 class RevisionConflictError(RuntimeError):
@@ -131,34 +65,29 @@ class Store:
         self._conn = sqlite3.connect(db_value, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        with self._lock:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._conn.executescript(_SCHEMA)
-            version_row = self._conn.execute(
-                "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()
-            try:
-                old_version = int(version_row["value"]) if version_row else 0
-            except (TypeError, ValueError):
-                old_version = 0
-            if old_version < _SCHEMA_VERSION:
-                self._conn.execute(
-                    """INSERT INTO meta (key, value) VALUES ('schema_version', ?)
-                       ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
-                    (str(_SCHEMA_VERSION),),
+        try:
+            with self._lock:
+                self._conn.execute("PRAGMA foreign_keys=ON")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+                self._migration_report = migrate_schema(
+                    self._conn,
+                    db_path=self._db_path,
                 )
-            self._conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('index_revision', '0')"
-            )
-            self._conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('db_identity', ?)",
-                (str(uuid.uuid4()),),
-            )
-            identity_row = self._conn.execute(
-                "SELECT value FROM meta WHERE key='db_identity'"
-            ).fetchone()
-            self._conn.commit()
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('index_revision', '0')"
+                )
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('db_identity', ?)",
+                    (str(uuid.uuid4()),),
+                )
+                identity_row = self._conn.execute(
+                    "SELECT value FROM meta WHERE key='db_identity'"
+                ).fetchone()
+                self._conn.commit()
+        except Exception:
+            self._conn.close()
+            raise
         location = str(self._db_path) if self._db_path is not None else ":memory:"
         self._db_identity = f"{location}|{identity_row['value']}"
 
@@ -175,6 +104,11 @@ class Store:
     def db_identity(self) -> str:
         """跨 Store 实例稳定、跨数据库文件隔离的缓存标识。"""
         return self._db_identity
+
+    @property
+    def migration_report(self) -> MigrationReport:
+        """本次打开数据库时的 schema migration 结果。"""
+        return self._migration_report
 
     # ---------- papers ----------
 

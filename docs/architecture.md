@@ -22,7 +22,8 @@ flowchart LR
 - `agent.py`：显式状态机、Planner、Executor、预算和统一引用验证。
 - `chat.py`：模型与工具的编排循环、暂停/恢复、结构化事件和最终答案验证。
 - `tool_protocol.py` / `tools.py`：工具合同、参数校验、副作用分类、确认票据和执行结果。
-- `store.py`：论文、分块、向量、稳定证据、Agent run 和事件日志的 SQLite 持久化。
+- `store.py`：论文、分块、向量、稳定证据、Agent run 和事件日志的 SQLite 兼容门面。
+- `storage/migrations.py`：从 v1 开始的有序 schema migrations、迁移历史校验、磁盘库一致备份与事务回滚边界。
 - `search.py`：BM25 与本地向量的混合检索及一致快照缓存。
 - `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 在 `v0.7.0` 提供检索、SSE 流式问答，以及 SSE 受控 Agent（流式工具调用、可视化确认票据、证据高亮与 run 审计侧栏，`agent_api.py`）。
 
@@ -71,11 +72,15 @@ stateDiagram-v2
 
 ## 持久化与可观测性
 
-SQLite schema v2 保存论文库和以下 Agent 数据：
+SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并为研究工作区建立持久化边界：
 
-- `agent_runs`：目标、计划、预算、状态和错误；
-- `agent_events`：有序状态、模型、工具、验证和预算事件；
-- `evidence`：稳定证据快照及来源指纹。
+- v1：`papers/chunks/meta`；
+- v2：`evidence/agent_runs/agent_events`；
+- v3：通用 document locator、project、research question、canonical source/identity、provider record 与 project-source membership；
+- v4：artifact、不可变 revision、artifact-evidence link 与 research note；
+- v5：可恢复 job、Agent session/transcript 与冻结的 pending action。
+
+每个 migration 都有名称、版本和 SHA-256 checksum 记录。磁盘数据库只在声明版本和已有表结构通过检查后迁移；升级前使用 SQLite backup API 生成一致备份，所有待执行步骤位于同一个 `BEGIN IMMEDIATE` 事务中。任一步、外键检查或历史校验失败都会回滚，未来版本数据库则不做修改并拒绝打开。
 
 事件默认保存必要元数据、哈希和结果摘要，避免把完整论文正文作为 trace 复制。LLM 响应同时保留 usage、finish reason 和 response ID，供后续成本与延迟评测使用。
 

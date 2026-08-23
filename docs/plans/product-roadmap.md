@@ -240,15 +240,15 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 ### Phase 1 — 安全派生与兼容基线
 
-- [ ] Step 1：从 `paper-agent/` 派生 `paper-research-agent/`，保留提交历史但移除旧 remote；确认 `paper-agent/` 与 `pagent-java/` 均无改动。
-- [ ] Step 2：使用 Git rename 将 package 改为 `pragent`，更新 distribution/config/static branding 和所有测试 import；注册唯一命令 `pra`，版本从 `0.1.0` 开始。
-- [ ] Step 3：在改功能前跑通旧的 pytest、wheel/package-data、CLI/TUI/Web smoke，记录派生基线。
+- [x] Step 1：从 `paper-agent/` 派生 `paper-research-agent/`，保留提交历史但移除旧 remote；确认 `paper-agent/` 与 `pagent-java/` 均无改动。
+- [x] Step 2：使用 Git rename 将 package 改为 `pragent`，更新 distribution/config/static branding 和所有测试 import；注册唯一命令 `pra`，版本从 `0.1.0` 开始。
+- [x] Step 3：在改功能前跑通旧的 pytest、wheel/package-data、CLI/TUI/Web smoke，记录派生基线。
 
 **Gate：** `pra --version/status/serve` 可用；旧 225 个测试语义全部保留；旧两个仓库 Git 状态不变。
 
 ### Phase 2 — 数据模型、迁移和项目工作区
 
-- [ ] Step 4：建立顺序 schema migrations 与 backup/rollback 边界；新增 project/source/artifact/revision/evidence-link/note/job/session/pending-action tables。
+- [x] Step 4：建立顺序 schema migrations 与 backup/rollback 边界；新增 project/source/artifact/revision/evidence-link/note/job/session/pending-action tables。
 - [ ] Step 5：实现 research/source/job repositories、CAS/version 检查、分页查询和 artifact freshness；避免把新 SQL 继续堆入 1100 行 `store.py`。
 - [ ] Step 6：实现 `pra import-pagent`：默认 dry-run、校验旧 DB/schema/文件、复制到临时目录、迁移验证后原子落位；目标已存在时 fail closed。
 - [ ] Step 7：完成最小 Web vertical slice：创建项目、编辑研究问题、从现有本地论文库选择来源、刷新后恢复。

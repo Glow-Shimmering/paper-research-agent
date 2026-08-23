@@ -10,6 +10,9 @@ flowchart LR
     User --> Web["FastAPI / Web"]
     TUI --> Runtime["Agent Runtime"]
     Web --> Ask["检索问答"]
+    Web --> Workspace["Project Workspace / HTMX"]
+    Workspace --> ResearchRepo["ResearchRepository"]
+    ResearchRepo --> Store
     Runtime --> Policy["ToolSpec + Policy"]
     Runtime --> LLM["OpenAI-compatible LLM"]
     Policy --> Tools["检索 / 深读 / 下载 / 索引 / 笔记"]
@@ -26,8 +29,9 @@ flowchart LR
 - `storage/migrations.py`：从 v1 开始的有序 schema migrations、迁移历史校验、磁盘库一致备份与事务回滚边界。
 - `storage/research_repository.py`：project/source/provenance/artifact revision/evidence link/note 的事务、分页与版本 CAS。
 - `storage/job_repository.py`：持久 job、幂等 enqueue、lease claim、progress/cancel/status CAS。
+- `web/routes/projects.py`：`/api/v1` project JSON API 与 Jinja/HTMX project/question/source vertical slice。
 - `search.py`：BM25 与本地向量的混合检索及一致快照缓存。
-- `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 在 `v0.7.0` 提供检索、SSE 流式问答，以及 SSE 受控 Agent（流式工具调用、可视化确认票据、证据高亮与 run 审计侧栏，`agent_api.py`）。
+- `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 保留检索、SSE 问答与受控 Agent 兼容工作台，并增加持久研究项目入口。
 
 ## Run 生命周期
 
@@ -85,6 +89,10 @@ SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 每个 migration 都有名称、版本和 SHA-256 checksum 记录。磁盘数据库只在声明版本和已有表结构通过检查后迁移；升级前使用 SQLite backup API 生成一致备份，所有待执行步骤位于同一个 `BEGIN IMMEDIATE` 事务中。任一步、外键检查或历史校验失败都会回滚，未来版本数据库则不做修改并拒绝打开。研究对象与 job 使用独立行 `version` 做 compare-and-swap，不复用只服务于搜索缓存失效的 `index_revision`。完整关系与 freshness 规则见 [数据模型](data-model.md)。
 
 事件默认保存必要元数据、哈希和结果摘要，避免把完整论文正文作为 trace 复制。LLM 响应同时保留 usage、finish reason 和 response ID，供后续成本与延迟评测使用。
+
+### Web 项目工作区边界
+
+`/ui/projects` 使用服务端 Jinja autoescape 与 wheel 内置 HTMX 2.0.8（MIT license 随资源打包），不依赖 Node/CDN。写表单必须同时通过同源检查、1MB body limit 和 HttpOnly/SameSite double-submit CSRF cookie；远程模式先通过 `X-PRA-Key` 换取不含原始 key 的 HttpOnly UI cookie。项目来源响应只返回题录、状态和安全 filename，不返回 `papers.path`、snapshot path 或抽取正文。project、question 与 source membership 均来自 SQLite repository，页面刷新或服务重启不依赖进程内状态。
 
 ### 旧 Pagent 显式导入
 

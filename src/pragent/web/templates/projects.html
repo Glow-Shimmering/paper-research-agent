@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}研究项目 · PRAgent{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Research workspace</p>
+    <h1>研究项目</h1>
+    <p>围绕研究问题组织本地论文、证据与后续产出。</p>
+  </div>
+</section>
+<section class="panel">
+  <h2>新建项目</h2>
+  <form method="post" action="/ui/projects" hx-post="/ui/projects" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>主题<input name="title" maxlength="200" required placeholder="例如：RAG 评测方法综述"></label>
+    <label>说明<textarea name="description" maxlength="2000" rows="3" placeholder="项目范围、目标或备注"></textarea></label>
+    <button type="submit">创建并打开</button>
+  </form>
+</section>
+<section class="panel">
+  <div class="section-title"><h2>已有项目</h2><span>{{ projects|length }} 个</span></div>
+  {% if projects %}
+  <div class="project-grid">
+    {% for project in projects %}
+    <a class="project-card" href="/ui/projects/{{ project.id }}">
+      <strong>{{ project.title }}</strong>
+      <span>{{ project.description or "暂无说明" }}</span>
+      <small>{{ project.status }} · v{{ project.version }}</small>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">还没有研究项目。先创建一个项目，再从本地论文库选择来源。</p>
+  {% endif %}
+</section>
+{% endblock %}

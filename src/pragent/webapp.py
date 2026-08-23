@@ -18,17 +18,30 @@ from .embeddings import Embedder
 from .indexer import index_library
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
-from .security import api_key_matches, is_loopback_host, origin_matches_request
+from .security import (
+    api_key_matches,
+    is_loopback_host,
+    origin_matches_request,
+    ui_auth_matches,
+    ui_auth_token,
+)
+from .storage import ResearchRepository
 from .store import Store
+from .web.routes import register_project_routes
 from .websearch import WebSearchError, search_papers
 
 
+def _web_resource_directory(name: str) -> str:
+    """返回随 wheel 安装的 Web 资源子目录。"""
+    directory = resources.files("pragent").joinpath("web", name)
+    if not directory.is_dir():
+        raise RuntimeError(f"PRAgent 安装不完整：缺少 Web {name} 资源")
+    return str(directory)
+
+
 def _web_directory() -> str:
-    """返回随 Python 包安装的 Web 静态资源目录。"""
-    web_dir = resources.files("pragent").joinpath("web")
-    if not web_dir.is_dir():
-        raise RuntimeError("PRAgent 安装不完整：缺少 Web 静态资源")
-    return str(web_dir)
+    """兼容工作台静态目录。"""
+    return _web_resource_directory("legacy")
 
 
 def _hit_dict(h) -> dict:
@@ -64,9 +77,16 @@ def _sse_event(event: dict) -> dict:
     return data
 
 
-def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) -> FastAPI:
-    """create_app(store=..., embedder=..., llm=...) 可注入依赖用于测试。"""
+def create_app(
+    store=None,
+    embedder=None,
+    llm=None,
+    api_key: str | None = None,
+    research_repository=None,
+) -> FastAPI:
+    """create_app(...) 可注入索引与研究 repository 依赖用于测试。"""
     owned_store: Store | None = None
+    owned_research_repository: ResearchRepository | None = None
     owned_embedder = None
     owned_llm = None
     dependency_lock = threading.RLock()
@@ -79,6 +99,8 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
         try:
             yield
         finally:
+            if owned_research_repository is not None:
+                owned_research_repository.close()
             if owned_store is not None:
                 owned_store.close()
 
@@ -91,6 +113,20 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                 config.ensure_data_dir()
                 owned_store = Store(config.DB_PATH)
             return owned_store
+
+    def _research_repository() -> ResearchRepository:
+        nonlocal owned_research_repository
+        if research_repository is not None:
+            return research_repository
+        with dependency_lock:
+            if owned_research_repository is None:
+                db_path = _store().db_path
+                if db_path is None:
+                    raise RuntimeError(
+                        "内存 Store 必须显式注入 ResearchRepository"
+                    )
+                owned_research_repository = ResearchRepository(db_path)
+            return owned_research_repository
 
     def _embedder():
         nonlocal owned_embedder
@@ -114,7 +150,11 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
 
     @app.middleware("http")
     async def protect_api(request: Request, call_next):
-        if request.url.path.startswith("/api/"):
+        is_protected_ui = request.url.path.startswith("/ui/") and not request.url.path.startswith(
+            "/ui/static/"
+        )
+        protected_path = request.url.path.startswith("/api/") or is_protected_ui
+        if protected_path:
             request_host = request.url.hostname or ""
             if not expected_api_key and not is_loopback_host(request_host):
                 return JSONResponse(
@@ -139,10 +179,18 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                         return JSONResponse(status_code=413, content={"detail": "请求体超过 1MB 限制"})
                 except ValueError:
                     return JSONResponse(status_code=400, content={"detail": "Content-Length 无效"})
-            if expected_api_key and not api_key_matches(
-                request.headers.get("x-pra-key"), expected_api_key
-            ):
-                return JSONResponse(status_code=401, content={"detail": "需要有效的 Paper Agent API key"})
+            if expected_api_key:
+                header_authenticated = api_key_matches(
+                    request.headers.get("x-pra-key"), expected_api_key
+                )
+                ui_cookie_authenticated = is_protected_ui and ui_auth_matches(
+                    request.cookies.get("pra_ui_auth"), expected_api_key
+                )
+                if not (header_authenticated or ui_cookie_authenticated):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "需要有效的 PRAgent API key"},
+                    )
             if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
                 chunks: list[bytes] = []
                 received = 0
@@ -157,6 +205,23 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
                 # Starlette 会优先重放缓存的 _body，供 FastAPI 后续 JSON 解析。
                 request._body = b"".join(chunks)
         return await call_next(request)
+
+    @app.post("/api/ui-auth")
+    def api_ui_auth(request: Request):
+        """把已通过 X-PRA-Key 的浏览器切换为 HttpOnly 研究 UI cookie。"""
+
+        response = JSONResponse({"ok": True})
+        if expected_api_key:
+            response.set_cookie(
+                "pra_ui_auth",
+                ui_auth_token(expected_api_key),
+                max_age=8 * 60 * 60,
+                httponly=True,
+                secure=request.url.scheme == "https",
+                samesite="strict",
+                path="/ui",
+            )
+        return response
 
     @app.get("/api/status")
     def api_status():
@@ -330,7 +395,17 @@ def create_app(store=None, embedder=None, llm=None, api_key: str | None = None) 
         return await run_in_threadpool(reindex_locked)
 
     register_agent_api(app, store_factory=_store, embedder_factory=_embedder, llm_factory=_llm)
-
+    register_project_routes(
+        app,
+        store_factory=_store,
+        repository_factory=_research_repository,
+        templates_directory=_web_resource_directory("templates"),
+    )
+    app.mount(
+        "/ui/static",
+        StaticFiles(directory=_web_resource_directory("static")),
+        name="research-static",
+    )
     app.mount("/", StaticFiles(directory=_web_directory(), html=True), name="web")
     return app
 

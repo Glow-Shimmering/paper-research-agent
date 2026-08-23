@@ -1,0 +1,36 @@
+<div id="source-panels">
+  <div class="selected-sources">
+    <h3>已选来源（{{ memberships|length }}）</h3>
+    {% if memberships %}
+      <ul class="source-list">
+      {% for membership in memberships %}
+        <li>
+          <strong>{{ membership.source.title }}</strong>
+          <span>{{ membership.source.authors|join("、") }}{% if membership.source.year %} · {{ membership.source.year }}{% endif %}</span>
+        </li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">尚未选择来源。</p>
+    {% endif %}
+  </div>
+  <div class="available-sources">
+    <h3>本地论文库</h3>
+    {% if available_papers %}
+      <div class="paper-picker">
+      {% for paper in available_papers %}
+        <form method="post" action="/ui/projects/{{ project.id }}/sources"
+              hx-post="/ui/projects/{{ project.id }}/sources"
+              hx-target="#source-panels" hx-swap="outerHTML" class="paper-row">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="paper_id" value="{{ paper.id }}">
+          <span><strong>{{ paper.title }}</strong><small>{{ paper.authors|join("、") }}{% if paper.year %} · {{ paper.year }}{% endif %} · {{ paper.chunk_count }} 分块</small></span>
+          <button type="submit" class="secondary">加入项目</button>
+        </form>
+      {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty">没有可添加的本地论文。请先运行 <code>pra index &lt;目录&gt;</code>。</p>
+    {% endif %}
+  </div>
+</div>

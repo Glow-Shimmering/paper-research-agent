@@ -22,9 +22,15 @@ def test_web_assets_are_installed_package_resources():
     web_dir = resources.files("pragent").joinpath("web")
 
     assert web_dir.is_dir()
-    assert web_dir.joinpath("index.html").is_file()
-    assert web_dir.joinpath("style.css").is_file()
-    assert web_dir.joinpath("app.js").is_file()
+    assert web_dir.joinpath("legacy", "index.html").is_file()
+    assert web_dir.joinpath("legacy", "style.css").is_file()
+    assert web_dir.joinpath("legacy", "app.js").is_file()
+    assert web_dir.joinpath("templates", "projects.html").is_file()
+    assert web_dir.joinpath("templates", "project_workspace.html").is_file()
+    assert web_dir.joinpath("templates", "fragments", "questions.html").is_file()
+    assert web_dir.joinpath("static", "app.css").is_file()
+    assert web_dir.joinpath("static", "htmx.min.js").is_file()
+    assert web_dir.joinpath("static", "HTMX-LICENSE.txt").is_file()
 
 
 class FakeLLM:
@@ -281,6 +287,7 @@ def test_index_page(tmp_path):
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "PRAgent" in r.text
+    assert 'href="/ui/projects"' in r.text
 
 
 def test_websearch_endpoint(monkeypatch, tmp_path):

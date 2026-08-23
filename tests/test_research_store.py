@@ -86,6 +86,10 @@ def test_sources_provenance_membership_and_local_paper_promotion(tmp_path):
 
     repo = ResearchRepository(db_path)
     project = repo.create_project("来源项目")
+    with pytest.raises(KeyError, match="研究项目不存在"):
+        repo.add_paper_to_project("project_missing", paper_id)
+    assert repo.list_sources().total == 0
+
     local = repo.ensure_source_for_paper(paper_id)
     same = repo.ensure_source_for_paper(paper_id)
     assert same.id == local.id

@@ -9,6 +9,7 @@
 - 问答：OpenAI 兼容 API（DeepSeek / OpenAI / 通义等），未配置 key 时退回纯检索；CLI、TUI 与 Web 均支持流式输出；回答“库里有哪些论文”类问题时以注入的论文库目录为权威来源（正文中的参考文献不算库藏）
 - 受控 Agent：显式 run 状态、调用预算、工具效果分类、写入/联网确认与可恢复执行
 - Web 端 Agent：SSE 流式对话、实时工具调用卡片、可视化确认票据、证据高亮与 run 审计侧栏
+- 持久研究项目：创建 project、编辑/排序研究问题、从现有本地论文库选择来源，刷新或重启后恢复
 - 证据链：单篇检索、页面/相邻分块深读、稳定 evidence ID、固定证据与引用校验
 - 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景
 - CLI 与本地 Web 界面双入口（统一命令名 `pra`）
@@ -63,7 +64,7 @@ pra websearch "llm survey"   # 联网检索 arXiv 论文（英文效果更佳）
 pra ask "这篇论文提出了什么方法？"   # 问答（需 API key，默认流式输出；--no-stream 关闭）
 pra ask --web "问题"         # 问答时同时联网检索 arXiv 论文
 pra chat                     # 受控 Agent TUI：需要 API key；回答逐字流式渲染，联网/写操作需 /confirm
-pra serve                    # 启动 Web 界面 http://127.0.0.1:8000（检索/问答/Agent/论文库四个标签页）
+pra serve                    # 启动 Web 界面 http://127.0.0.1:8000（研究项目 + 兼容工作台）
 pra status                   # 库与配置状态
 pra import-pagent --source ~/.pagent          # 只读检查旧 Pagent 数据（默认 dry-run）
 pra import-pagent --source ~/.pagent --execute # 校验后复制导入到 PRA_DATA_DIR
@@ -74,7 +75,9 @@ pra --version                # 显示当前版本（版本号与 wheel 元数据
 
 Windows 下 CLI 会把标准输出和错误输出配置为 UTF-8，含数学符号等 Unicode 文本的检索结果可以直接输出或重定向到 UTF-8 文件。
 
-`pra serve` 默认只监听本机。使用 `--host 0.0.0.0`、非 loopback Host 或 HTTPS 反向代理时必须设置 `PRA_WEB_API_KEY`；Web 页面会在首次 API 请求时询问 key，并仅在当前浏览器会话中保存。直接远程监听还必须同时传入 `--ssl-certfile` 与 `--ssl-keyfile`，或让 HTTPS 反向代理转发到 `127.0.0.1`（并正确转发原始 scheme/host）。仅在可信隔离网络中，才可显式添加 `--allow-insecure-http` 使用明文 HTTP。
+`pra serve` 默认只监听本机。主页保留原检索/问答/Agent/论文库兼容工作台，并提供「研究项目」入口；project/question/source membership 全部写入 SQLite，页面刷新与服务重启后仍可恢复。研究工作区使用服务端 Jinja 模板与 wheel 内置 HTMX，写表单采用 SameSite double-submit CSRF token；返回的本地论文项不暴露主机绝对路径。
+
+使用 `--host 0.0.0.0`、非 loopback Host 或 HTTPS 反向代理时必须设置 `PRA_WEB_API_KEY`；Web 页面会在首次 API 请求时询问 key，并仅在当前浏览器会话中保存。直接远程监听还必须同时传入 `--ssl-certfile` 与 `--ssl-keyfile`，或让 HTTPS 反向代理转发到 `127.0.0.1`（并正确转发原始 scheme/host）。仅在可信隔离网络中，才可显式添加 `--allow-insecure-http` 使用明文 HTTP。
 
 ### 隐私边界
 

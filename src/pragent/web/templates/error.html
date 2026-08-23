@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}请求失败 · PRAgent{% endblock %}
+{% block content %}
+<section class="panel error-panel">
+  <p class="eyebrow">Request failed</p>
+  <h1>操作未完成</h1>
+  <p>{{ message }}</p>
+  <p><a href="/ui/projects">返回项目列表</a></p>
+</section>
+{% endblock %}

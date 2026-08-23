@@ -11,9 +11,17 @@ from pathlib import Path
 
 
 REQUIRED = {
-    "pragent/web/index.html",
-    "pragent/web/app.js",
-    "pragent/web/style.css",
+    "pragent/web/legacy/index.html",
+    "pragent/web/legacy/app.js",
+    "pragent/web/legacy/style.css",
+    "pragent/web/templates/base.html",
+    "pragent/web/templates/projects.html",
+    "pragent/web/templates/project_workspace.html",
+    "pragent/web/templates/fragments/questions.html",
+    "pragent/web/templates/fragments/sources.html",
+    "pragent/web/static/app.css",
+    "pragent/web/static/htmx.min.js",
+    "pragent/web/static/HTMX-LICENSE.txt",
 }
 
 
@@ -50,15 +58,26 @@ def _run_installed_smoke(wheel: Path) -> None:
         probe = """
 from pathlib import Path
 import sys
+import tempfile
 import pragent
 from fastapi.testclient import TestClient
+from pragent.store import Store
 from pragent.webapp import _web_directory, create_app
 
 assert str(Path(pragent.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()))
 assert Path(_web_directory()).is_dir()
-response = TestClient(create_app()).get('/')
-assert response.status_code == 200
-assert '<html' in response.text.lower()
+with tempfile.TemporaryDirectory() as raw:
+    store = Store(Path(raw) / 'wheel.db')
+    with TestClient(
+        create_app(store=store), base_url='http://127.0.0.1'
+    ) as client:
+        response = client.get('/')
+        assert response.status_code == 200
+        assert '<html' in response.text.lower()
+        workspace = client.get('/ui/projects')
+        assert workspace.status_code == 200
+        assert '研究项目' in workspace.text
+    store.close()
 """
         subprocess.run([str(python), "-c", probe], check=True, env=child_env)
         print(f"isolated wheel smoke passed: {version}")

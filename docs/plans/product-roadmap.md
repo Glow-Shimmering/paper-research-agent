@@ -251,7 +251,7 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 - [x] Step 4：建立顺序 schema migrations 与 backup/rollback 边界；新增 project/source/artifact/revision/evidence-link/note/job/session/pending-action tables。
 - [x] Step 5：实现 research/source/job repositories、CAS/version 检查、分页查询和 artifact freshness；避免把新 SQL 继续堆入 1100 行 `store.py`。
 - [x] Step 6：实现 `pra import-pagent`：默认 dry-run、校验旧 DB/schema/文件、复制到临时目录、迁移验证后原子落位；目标已存在时 fail closed。
-- [ ] Step 7：完成最小 Web vertical slice：创建项目、编辑研究问题、从现有本地论文库选择来源、刷新后恢复。
+- [x] Step 7：完成最小 Web vertical slice：创建项目、编辑研究问题、从现有本地论文库选择来源、刷新后恢复。
 
 **Gate：** 新库、从 v0.7 导入库、失败回滚三种路径均测试；项目/问题/来源在服务重启后存在。
 

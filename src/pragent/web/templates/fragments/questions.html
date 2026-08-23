@@ -1,0 +1,26 @@
+<div id="question-list" class="item-list">
+  {% if questions %}
+    {% for item in questions %}
+    <article class="editable-item">
+      <form method="post" action="/ui/projects/{{ project.id }}/questions/{{ item.id }}"
+            hx-post="/ui/projects/{{ project.id }}/questions/{{ item.id }}"
+            hx-target="#question-list" hx-swap="outerHTML" class="question-edit">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="expected_version" value="{{ item.version }}">
+        <label>顺序<input class="position" type="number" name="position" min="0" value="{{ item.position }}"></label>
+        <label>问题<input name="question" maxlength="1000" required value="{{ item.question }}"></label>
+        <button type="submit" class="secondary">保存</button>
+      </form>
+      <form method="post" action="/ui/projects/{{ project.id }}/questions/{{ item.id }}/delete"
+            hx-post="/ui/projects/{{ project.id }}/questions/{{ item.id }}/delete"
+            hx-target="#question-list" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="expected_version" value="{{ item.version }}">
+        <button type="submit" class="danger">删除</button>
+      </form>
+    </article>
+    {% endfor %}
+  {% else %}
+    <p class="empty">尚未添加研究问题。</p>
+  {% endif %}
+</div>

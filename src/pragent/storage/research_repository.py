@@ -218,7 +218,7 @@ class ResearchRepository(SQLiteRepository):
                         (project_id,),
                     ).fetchone()[0]
                 )
-            if position < 0:
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
                 raise ValueError("position 必须是非负整数")
             connection.execute(
                 """
@@ -251,12 +251,13 @@ class ResearchRepository(SQLiteRepository):
         expected_version: int,
         question: Any = _UNSET,
         position: Any = _UNSET,
+        project_id: Optional[str] = None,
     ) -> ResearchQuestion:
         values: dict[str, Any] = {}
         if question is not _UNSET:
             values["question"] = _required_text(question, "question")
         if position is not _UNSET:
-            if not isinstance(position, int) or position < 0:
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
                 raise ValueError("position 必须是非负整数")
             values["position"] = position
         if not values:
@@ -264,8 +265,10 @@ class ResearchRepository(SQLiteRepository):
                 row = self._conn.execute(
                     "SELECT * FROM research_questions WHERE id=?", (question_id,)
                 ).fetchone()
-            if row is None:
-                raise KeyError(f"研究问题不存在：{question_id}")
+            if row is None or (
+                project_id is not None and row["project_id"] != project_id
+            ):
+                raise KeyError(f"研究问题不存在或不属于当前项目：{question_id}")
             current = self._question_from_row(row)
             if current.version != expected_version:
                 raise RecordVersionConflictError(
@@ -273,16 +276,30 @@ class ResearchRepository(SQLiteRepository):
                 )
             return current
         assignments = [f"{column}=?" for column in values]
+        scope_clause = " AND project_id=?" if project_id is not None else ""
+        params = [*values.values(), _now_iso(), question_id, expected_version]
+        if project_id is not None:
+            params.append(project_id)
         with self._transaction(immediate=True) as connection:
             cursor = connection.execute(
                 f"""
                 UPDATE research_questions
                 SET {', '.join(assignments)}, updated_at=?, version=version+1
-                WHERE id=? AND version=?
+                WHERE id=? AND version=?{scope_clause}
                 """,
-                (*values.values(), _now_iso(), question_id, expected_version),
+                params,
             )
             if not cursor.rowcount:
+                current = connection.execute(
+                    "SELECT project_id FROM research_questions WHERE id=?",
+                    (question_id,),
+                ).fetchone()
+                if current is None or (
+                    project_id is not None and current["project_id"] != project_id
+                ):
+                    raise KeyError(
+                        f"研究问题不存在或不属于当前项目：{question_id}"
+                    )
                 self._raise_cas_failure_locked(
                     connection,
                     "research_questions",
@@ -295,13 +312,36 @@ class ResearchRepository(SQLiteRepository):
             ).fetchone()
         return self._question_from_row(row)
 
-    def delete_question(self, question_id: str, *, expected_version: int) -> None:
+    def delete_question(
+        self,
+        question_id: str,
+        *,
+        expected_version: int,
+        project_id: Optional[str] = None,
+    ) -> None:
+        scope_clause = " AND project_id=?" if project_id is not None else ""
+        params: list[Any] = [question_id, expected_version]
+        if project_id is not None:
+            params.append(project_id)
         with self._transaction(immediate=True) as connection:
             cursor = connection.execute(
-                "DELETE FROM research_questions WHERE id=? AND version=?",
-                (question_id, expected_version),
+                f"""
+                DELETE FROM research_questions
+                WHERE id=? AND version=?{scope_clause}
+                """,
+                params,
             )
             if not cursor.rowcount:
+                current = connection.execute(
+                    "SELECT project_id FROM research_questions WHERE id=?",
+                    (question_id,),
+                ).fetchone()
+                if current is None or (
+                    project_id is not None and current["project_id"] != project_id
+                ):
+                    raise KeyError(
+                        f"研究问题不存在或不属于当前项目：{question_id}"
+                    )
                 self._raise_cas_failure_locked(
                     connection,
                     "research_questions",
@@ -671,69 +711,121 @@ class ResearchRepository(SQLiteRepository):
         """把现有 indexed paper 幂等提升为 research source。"""
 
         with self._transaction(immediate=True) as connection:
-            paper = connection.execute(
-                "SELECT * FROM papers WHERE id=?", (paper_id,)
-            ).fetchone()
-            if paper is None:
-                raise KeyError(f"索引论文不存在：{paper_id}")
-            existing = connection.execute(
-                """
-                SELECT rs.* FROM source_identities si
-                JOIN research_sources rs ON rs.id=si.source_id
-                WHERE si.identity_kind='content_sha256' AND si.normalized_value=?
-                """,
-                (paper["sha256"],),
-            ).fetchone()
-            if existing:
-                if existing["indexed_paper_id"] is None:
+            row = self._ensure_source_for_paper_locked(connection, paper_id)
+        return self._source_from_row(row)
+
+    def add_paper_to_project(
+        self,
+        project_id: str,
+        paper_id: int,
+        *,
+        position: Optional[int] = None,
+        note: str = "",
+    ) -> ProjectSourceMembership:
+        """在一个事务内提升 indexed paper 并加入 project。"""
+
+        with self._transaction(immediate=True) as connection:
+            self._require_row_locked(
+                connection, "research_projects", project_id, "研究项目"
+            )
+            source = self._ensure_source_for_paper_locked(connection, paper_id)
+            if position is None:
+                position = int(
                     connection.execute(
                         """
-                        UPDATE research_sources
-                        SET indexed_paper_id=?, status='ready', updated_at=?, version=version+1
-                        WHERE id=?
+                        SELECT COALESCE(MAX(position), -1) + 1
+                        FROM project_sources WHERE project_id=?
                         """,
-                        (paper_id, _now_iso(), existing["id"]),
-                    )
-                    existing = connection.execute(
-                        "SELECT * FROM research_sources WHERE id=?", (existing["id"],)
-                    ).fetchone()
-                return self._source_from_row(existing)
-
-            source_id = _new_id("source")
-            identity_id = _new_id("identity")
-            now = _now_iso()
+                        (project_id,),
+                    ).fetchone()[0]
+                )
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+                raise ValueError("position 必须是非负整数")
             connection.execute(
                 """
-                INSERT INTO research_sources(
-                    id, canonical_key, source_kind, title, authors, year,
-                    content_sha256, indexed_paper_id, status, metadata, locator,
-                    version, created_at, updated_at
-                ) VALUES (?, ?, 'paper', ?, ?, ?, ?, ?, 'ready', '{}', '{}', 1, ?, ?)
+                INSERT INTO project_sources(project_id, source_id, position, note, added_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, source_id) DO UPDATE SET
+                    position=excluded.position, note=excluded.note
                 """,
-                (
-                    source_id,
-                    f"content_sha256:{paper['sha256']}",
-                    paper["title"],
-                    paper["authors"],
-                    paper["year"],
-                    paper["sha256"],
-                    paper_id,
-                    now,
-                    now,
-                ),
-            )
-            connection.execute(
-                """
-                INSERT INTO source_identities(
-                    id, source_id, identity_kind, normalized_value, is_primary, created_at
-                ) VALUES (?, ?, 'content_sha256', ?, 1, ?)
-                """,
-                (identity_id, source_id, paper["sha256"], now),
+                (project_id, source["id"], position, str(note), _now_iso()),
             )
             row = connection.execute(
-                "SELECT * FROM research_sources WHERE id=?", (source_id,)
+                """
+                SELECT ps.position, ps.note, ps.added_at, rs.*
+                FROM project_sources ps
+                JOIN research_sources rs ON rs.id=ps.source_id
+                WHERE ps.project_id=? AND ps.source_id=?
+                """,
+                (project_id, source["id"]),
             ).fetchone()
-        return self._source_from_row(row)
+        return self._membership_from_row(project_id, row)
+
+    def _ensure_source_for_paper_locked(
+        self, connection: sqlite3.Connection, paper_id: int
+    ) -> sqlite3.Row:
+        paper = connection.execute(
+            "SELECT * FROM papers WHERE id=?", (paper_id,)
+        ).fetchone()
+        if paper is None:
+            raise KeyError(f"索引论文不存在：{paper_id}")
+        existing = connection.execute(
+            """
+            SELECT rs.* FROM source_identities si
+            JOIN research_sources rs ON rs.id=si.source_id
+            WHERE si.identity_kind='content_sha256' AND si.normalized_value=?
+            """,
+            (paper["sha256"],),
+        ).fetchone()
+        if existing:
+            if existing["indexed_paper_id"] is None:
+                connection.execute(
+                    """
+                    UPDATE research_sources
+                    SET indexed_paper_id=?, status='ready', updated_at=?, version=version+1
+                    WHERE id=?
+                    """,
+                    (paper_id, _now_iso(), existing["id"]),
+                )
+                existing = connection.execute(
+                    "SELECT * FROM research_sources WHERE id=?", (existing["id"],)
+                ).fetchone()
+            return existing
+
+        source_id = _new_id("source")
+        identity_id = _new_id("identity")
+        now = _now_iso()
+        connection.execute(
+            """
+            INSERT INTO research_sources(
+                id, canonical_key, source_kind, title, authors, year,
+                content_sha256, indexed_paper_id, status, metadata, locator,
+                version, created_at, updated_at
+            ) VALUES (?, ?, 'paper', ?, ?, ?, ?, ?, 'ready', '{}', '{}', 1, ?, ?)
+            """,
+            (
+                source_id,
+                f"content_sha256:{paper['sha256']}",
+                paper["title"],
+                paper["authors"],
+                paper["year"],
+                paper["sha256"],
+                paper_id,
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO source_identities(
+                id, source_id, identity_kind, normalized_value, is_primary, created_at
+            ) VALUES (?, ?, 'content_sha256', ?, 1, ?)
+            """,
+            (identity_id, source_id, paper["sha256"], now),
+        )
+        return connection.execute(
+            "SELECT * FROM research_sources WHERE id=?", (source_id,)
+        ).fetchone()
 
     # ---------- project source membership ----------
 
@@ -760,7 +852,7 @@ class ResearchRepository(SQLiteRepository):
                         (project_id,),
                     ).fetchone()[0]
                 )
-            if position < 0:
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
                 raise ValueError("position 必须是非负整数")
             connection.execute(
                 """

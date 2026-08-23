@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }} · PRAgent{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects">← 返回项目</a></p>
+<section class="project-hero">
+  <p class="eyebrow">Project workspace</p>
+  <h1>{{ project.title }}</h1>
+  <p>{{ project.description or "暂无项目说明" }}</p>
+  <div class="meta-row">
+    <span>{{ project.default_language }}</span>
+    <span>{{ project.citation_style }}</span>
+    <span>{{ project.status }}</span>
+  </div>
+</section>
+<div class="workspace-grid">
+  <section class="panel">
+    <div class="section-title"><h2>研究问题</h2><span>可排序、可编辑</span></div>
+    <form method="post" action="/ui/projects/{{ project.id }}/questions"
+          hx-post="/ui/projects/{{ project.id }}/questions"
+          hx-target="#question-list" hx-swap="outerHTML" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input name="question" maxlength="1000" required placeholder="输入一个明确的研究问题">
+      <button type="submit">添加</button>
+    </form>
+    {% include "fragments/questions.html" %}
+  </section>
+  <section class="panel">
+    <div class="section-title"><h2>项目来源</h2><span>从已索引论文中选择</span></div>
+    {% include "fragments/sources.html" %}
+  </section>
+</div>
+{% endblock %}

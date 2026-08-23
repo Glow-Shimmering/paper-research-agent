@@ -36,6 +36,19 @@ async function api(url, opts, retried) {
   return resp.json();
 }
 
+const workspaceLink = $("#workspace-link");
+if (workspaceLink) {
+  workspaceLink.addEventListener("click", async function (event) {
+    event.preventDefault();
+    try {
+      await api("/api/ui-auth", { method: "POST" });
+      window.location.assign(workspaceLink.href);
+    } catch (err) {
+      window.alert("无法打开研究项目：" + err.message);
+    }
+  });
+}
+
 async function apiStream(url, opts, onEvent, retried) {
   const request = Object.assign({}, opts || {});
   const headers = new Headers(request.headers || {});

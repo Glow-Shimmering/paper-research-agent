@@ -1,4 +1,10 @@
-from pragent.security import api_key_matches, is_loopback_host, origin_matches_request
+from pragent.security import (
+    api_key_matches,
+    is_loopback_host,
+    origin_matches_request,
+    ui_auth_matches,
+    ui_auth_token,
+)
 
 
 def test_loopback_detection_is_fail_closed():
@@ -16,6 +22,16 @@ def test_api_key_comparison_requires_non_empty_expected_key():
     assert not api_key_matches("wrong", "secret")
     assert not api_key_matches(None, "secret")
     assert not api_key_matches("", "")
+
+
+def test_ui_auth_cookie_is_derived_without_exposing_api_key():
+    token = ui_auth_token("secret")
+
+    assert token and token != "secret" and len(token) == 64
+    assert ui_auth_matches(token, "secret")
+    assert not ui_auth_matches(token, "changed")
+    assert not ui_auth_matches(None, "secret")
+    assert ui_auth_token("") == ""
 
 
 def test_origin_must_match_scheme_host_and_port():

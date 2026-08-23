@@ -10,6 +10,7 @@ from . import config
 from .answer import answer_stream
 from .answer import ask as answer_ask
 from .embeddings import Embedder
+from .import_pagent import ImportPagentError, import_pagent_data
 from .indexer import index_library, validate_pdf_directory
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
@@ -61,6 +62,42 @@ def main(
 def _todo(cmd: str) -> None:
     typer.echo(f"[pra] {cmd} 尚未实现", err=True)
     raise typer.Exit(1)
+
+
+@app.command("import-pagent")
+def import_pagent_command(
+    source: str = typer.Option("~/.pagent", "--source", help="旧 Pagent 数据目录"),
+    target: str = typer.Option(None, "--target", help="目标目录；默认 PRA_DATA_DIR"),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="实际执行；不提供时只做只读检查和 dry-run",
+    ),
+):
+    """显式复制旧 Pagent 数据；默认 dry-run，绝不原地升级旧库。"""
+
+    target_dir = Path(target).expanduser() if target else config.LIBRARY_DIR
+    try:
+        result = import_pagent_data(source, target_dir, execute=execute)
+    except ImportPagentError as exc:
+        typer.echo(f"错误：{exc}", err=True)
+        raise typer.Exit(1)
+    plan = result.plan
+    typer.echo(
+        f"旧库：schema v{plan.source_schema_version}，"
+        f"论文 {plan.papers} 篇，分块 {plan.chunks} 条，"
+        f"附加文件 {len(plan.files)} 个"
+    )
+    typer.echo(f"来源：{plan.source_dir}")
+    typer.echo(f"目标：{plan.target_dir}")
+    if plan.external_paper_paths:
+        typer.echo(
+            f"外部论文路径：{len(plan.external_paper_paths)} 个（验证后保留原引用，不复制）"
+        )
+    if result.executed:
+        typer.echo(f"导入完成：目标 schema v{result.target_schema_version}")
+    else:
+        typer.echo("Dry-run 完成：未创建目标目录；确认后加 --execute 执行。")
 
 
 @app.command()

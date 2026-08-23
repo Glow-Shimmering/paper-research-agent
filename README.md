@@ -65,8 +65,12 @@ pra ask --web "问题"         # 问答时同时联网检索 arXiv 论文
 pra chat                     # 受控 Agent TUI：需要 API key；回答逐字流式渲染，联网/写操作需 /confirm
 pra serve                    # 启动 Web 界面 http://127.0.0.1:8000（检索/问答/Agent/论文库四个标签页）
 pra status                   # 库与配置状态
+pra import-pagent --source ~/.pagent          # 只读检查旧 Pagent 数据（默认 dry-run）
+pra import-pagent --source ~/.pagent --execute # 校验后复制导入到 PRA_DATA_DIR
 pra --version                # 显示当前版本（版本号与 wheel 元数据同源）
 ```
+
+`pra import-pagent` 绝不原地升级 `~/.pagent`：默认只读检查 schema、SQLite 完整性、论文内容哈希和复制清单。`--execute` 使用 SQLite online backup（包含已提交 WAL）复制到目标同盘 staging，在 staging 中迁移并校验后再原子落位；目标目录已存在、旧文件变化或任一步失败都会拒绝覆盖。位于旧数据目录内的论文路径会重写到新目录，外部论文路径经校验后保留原引用。
 
 Windows 下 CLI 会把标准输出和错误输出配置为 UTF-8，含数学符号等 Unicode 文本的检索结果可以直接输出或重定向到 UTF-8 文件。
 

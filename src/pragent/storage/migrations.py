@@ -488,18 +488,31 @@ _REQUIRED_COLUMNS: dict[int, dict[str, frozenset[str]]] = {
                 "source_hash",
                 "paper_sha256",
                 "chunk_text_sha256",
+                "title",
+                "authors",
+                "year",
                 "path",
                 "page",
                 "chunk_seq",
                 "text",
+                "annotation",
                 "pinned_at",
             }
         ),
         "agent_runs": frozenset(
-            {"id", "objective", "status", "created_at", "updated_at"}
+            {
+                "id",
+                "objective",
+                "status",
+                "plan",
+                "budget",
+                "error",
+                "created_at",
+                "updated_at",
+            }
         ),
         "agent_events": frozenset(
-            {"id", "run_id", "seq", "event_type", "created_at"}
+            {"id", "run_id", "seq", "event_type", "payload", "created_at"}
         ),
     },
     3: {

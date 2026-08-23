@@ -1,6 +1,6 @@
 """数据模型：论文、分块、检索命中与持久化研究记录。"""
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Generic, Optional, TypeVar
 
 import numpy as np
 
@@ -137,3 +137,191 @@ class SearchSnapshot:
     embeddings: np.ndarray = field(repr=False, compare=False)
     embed_model: Optional[str] = None
     revision: int = 0
+
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class Page(Generic[T]):
+    """Repository 的稳定分页返回值。"""
+
+    total: int
+    items: tuple[T, ...]
+    limit: int
+    offset: int
+
+
+@dataclass(frozen=True)
+class ResearchProject:
+    id: str
+    title: str
+    description: str
+    default_language: str
+    citation_style: str
+    status: str
+    version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ResearchQuestion:
+    id: str
+    project_id: str
+    question: str
+    position: int
+    version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ResearchSource:
+    id: str
+    canonical_key: str
+    source_kind: str
+    title: str
+    authors: tuple[str, ...]
+    year: Optional[int]
+    doi: Optional[str]
+    arxiv_id: Optional[str]
+    canonical_url: Optional[str]
+    content_sha256: Optional[str]
+    indexed_paper_id: Optional[int]
+    status: str
+    metadata: Any
+    locator: Any
+    snapshot_path: Optional[str]
+    snapshot_sha256: Optional[str]
+    extracted_text: Optional[str] = field(repr=False, compare=False)
+    fetched_at: Optional[str]
+    version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    id: str
+    source_id: str
+    identity_kind: str
+    normalized_value: str
+    is_primary: bool
+    created_at: str
+
+
+@dataclass(frozen=True)
+class SourceRecord:
+    id: str
+    source_id: str
+    provider: str
+    provider_record_id: str
+    record_url: Optional[str]
+    raw_metadata: Any
+    retrieved_at: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ProjectSourceMembership:
+    project_id: str
+    source: ResearchSource
+    position: int
+    note: str
+    added_at: str
+
+
+@dataclass(frozen=True)
+class ResearchArtifact:
+    id: str
+    project_id: str
+    source_id: Optional[str]
+    artifact_type: str
+    title: str
+    status: str
+    current_revision_number: int
+    version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ArtifactRevision:
+    id: str
+    artifact_id: str
+    revision_number: int
+    parent_revision_id: Optional[str]
+    content: Any
+    created_by: str
+    source_fingerprint: Optional[str]
+    model: Optional[str]
+    usage: Any
+    finish_reason: Optional[str]
+    prompt_version: Optional[str]
+    schema_version: Optional[int]
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ArtifactEvidenceLink:
+    artifact_revision_id: str
+    evidence_id: str
+    field_path: str
+    ordinal: int
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ArtifactFreshness:
+    artifact_id: str
+    revision_id: Optional[str]
+    stale: bool
+    saved_fingerprint: Optional[str]
+    current_fingerprint: Optional[str]
+    reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ResearchNote:
+    id: str
+    project_id: str
+    scope_kind: str
+    source_id: Optional[str]
+    evidence_id: Optional[str]
+    title: str
+    content_markdown: str
+    version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ResearchJob:
+    id: str
+    project_id: Optional[str]
+    artifact_id: Optional[str]
+    job_type: str
+    status: str
+    payload: Any
+    result: Any
+    error_code: Optional[str]
+    error_message: Optional[str]
+    progress_current: int
+    progress_total: Optional[int]
+    attempts: int
+    max_attempts: int
+    idempotent: bool
+    priority: int
+    run_after: Optional[str]
+    timeout_seconds: Optional[int]
+    idempotency_key: Optional[str]
+    lease_owner: Optional[str]
+    lease_expires_at: Optional[str]
+    cancel_requested_at: Optional[str]
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    version: int
+    created_at: str
+    updated_at: str

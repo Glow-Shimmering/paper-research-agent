@@ -183,6 +183,9 @@ def hybrid_search(store, embedder, query: str, top: int = 10, per_paper_cap: int
             page=items[idx].page,
             text=items[idx].text,
             score=score,
+            source_kind=items[idx].source_kind,
+            canonical_uri=items[idx].canonical_uri,
+            locator=items[idx].locator,
         )
         for idx, score in ranked
     ]
@@ -267,6 +270,9 @@ def search_within_paper(
             page=int(_record_value(chunks[index], "page", default=0)),
             text=str(_record_value(chunks[index], "text", default="")),
             score=score,
+            source_kind=str(_record_value(paper, "source_kind", default="pdf")),
+            canonical_uri=_record_value(paper, "canonical_uri"),
+            locator=_record_value(paper, "locator", default={}) or {},
         )
         for index, score in ranked[:top]
     ]

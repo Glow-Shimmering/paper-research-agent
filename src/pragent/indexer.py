@@ -56,6 +56,41 @@ def _is_within(path: Path, directory: Path) -> bool:
         return False
 
 
+def _inherit_document_metadata(paper: Paper, existing: Optional[Paper]) -> Paper:
+    if existing is not None:
+        paper.source_kind = existing.source_kind
+        paper.canonical_uri = existing.canonical_uri
+        paper.locator = existing.locator
+    return paper
+
+
+def _force_scope_ids(
+    papers: list[Paper],
+    *,
+    previous_library_dir: Optional[str],
+    current_library_dir: Path,
+    seen_paths: set[str],
+) -> list[int]:
+    roots = [current_library_dir]
+    if previous_library_dir:
+        previous = _normalized_path(previous_library_dir)
+        if previous not in roots:
+            roots.append(previous)
+    delete_ids: list[int] = []
+    for paper in papers:
+        if paper.source_kind == "web" or paper.path in seen_paths:
+            continue
+        path = _normalized_path(paper.path)
+        in_scope = (
+            any(_is_within(path, root) for root in roots)
+            if previous_library_dir
+            else paper.source_kind == "pdf"
+        )
+        if in_scope and paper.id is not None:
+            delete_ids.append(paper.id)
+    return delete_ids
+
+
 def _new_result() -> dict:
     return {
         "added": 0,
@@ -185,8 +220,17 @@ def index_library(
             progress(f"[{i}/{len(pdfs)}] {path.name}")
             try:
                 digest = _sha256(path)
+                paper, chunks, skipped = _prepare_paper(
+                    path, digest, embedder, refine=refine, llm=llm
+                )
                 staged.append(
-                    _prepare_paper(path, digest, embedder, refine=refine, llm=llm)
+                    (
+                        _inherit_document_metadata(
+                            paper, existing_by_path.get(str(path))
+                        ),
+                        chunks,
+                        skipped,
+                    )
                 )
             except Exception as exc:
                 result["failed"] += 1
@@ -196,8 +240,43 @@ def index_library(
                 f"强制重建预处理失败（{result['failed']} 篇）；原索引未删除。"
             )
 
-        store.replace_library(
-            [(paper, chunks) for paper, chunks, _ in staged],
+        # Force 只替换主 PDF scope；Web 和主目录外的显式来源继续保留，
+        # 但必须在同一提交中用当前模型重嵌入，避免混合向量模型。
+        scope_delete_ids = _force_scope_ids(
+            existing_papers,
+            previous_library_dir=stored_library_dir,
+            current_library_dir=pdf_dir,
+            seen_paths=seen,
+        )
+        delete_set = set(scope_delete_ids)
+        preserved_entries: list[tuple[Paper, list[Chunk]]] = []
+        try:
+            for existing in existing_papers:
+                if existing.id in delete_set or existing.path in seen:
+                    continue
+                existing_chunks = store.paper_chunks(existing.id)
+                if existing_chunks:
+                    vectors = embedder.embed([chunk.text for chunk in existing_chunks])
+                    existing_chunks = [
+                        Chunk(
+                            None,
+                            existing.id,
+                            chunk.seq,
+                            chunk.page,
+                            chunk.text,
+                            vectors[index],
+                        )
+                        for index, chunk in enumerate(existing_chunks)
+                    ]
+                preserved_entries.append((existing, existing_chunks))
+        except Exception as exc:
+            raise RuntimeError(
+                "强制重建无法重嵌入 scope 外文档；原索引未删除。"
+            ) from exc
+        store.commit_index_update(
+            [(paper, chunks) for paper, chunks, _ in staged]
+            + preserved_entries,
+            scope_delete_ids,
             embed_model=embedder.model_name,
             library_dir=str(pdf_dir),
             expected_revision=state.revision,
@@ -230,6 +309,7 @@ def index_library(
             paper, chunks, skipped_no_text = _prepare_paper(
                 path, digest, embedder, refine=refine, llm=llm
             )
+            paper = _inherit_document_metadata(paper, existing)
         except Exception as exc:
             result["failed"] += 1
             progress(f"  处理失败：{exc}")
@@ -297,6 +377,7 @@ def index_pdf(
             paper, chunks, skipped_no_text = _prepare_paper(
                 path, digest, embedder, refine=refine, llm=llm
             )
+            paper = _inherit_document_metadata(paper, existing)
         except Exception as exc:
             result["failed"] = 1
             progress(f"  处理失败：{exc}")

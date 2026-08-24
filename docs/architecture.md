@@ -36,7 +36,8 @@ flowchart LR
 - `sources/http.py` / `sources/discovery.py`：不缓存请求密钥的 fixture/response cache、线程安全节流、429/5xx 有界退避，以及多 provider 聚合与部分失败隔离。
 - `ingestion/safe_fetch.py`：逐跳 URL/DNS 校验并把连接固定到已验证公网 IP；限制重定向、总超时、MIME 与响应大小。
 - `ingestion/snapshots.py` / `html_extract.py` / `web.py`：原始 HTML 的 content-addressed gzip 原子快照、Trafilatura 文本抽取及可恢复 source 状态。
-- `search.py`：BM25 与本地向量的混合检索及一致快照缓存。
+- `ingestion/indexing.py`：把网页纯文本或已下载 PDF 适配为通用 `Paper(source_kind/canonical_uri/locator)`，再复用同一 chunk/embed/index/source-link 事务边界。
+- `search.py`：PDF 与 Web document 共用 BM25、本地向量、RRF、一致 snapshot cache 和稳定 evidence。
 - `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 保留检索、SSE 问答与受控 Agent 兼容工作台，并增加持久研究项目入口。
 
 ## Run 生命周期

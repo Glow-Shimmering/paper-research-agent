@@ -46,7 +46,9 @@ erDiagram
 
 聚合结果通过 `upsert_merged_source()` 在一个 `BEGIN IMMEDIATE` 事务内写入 canonical row、identities 和 provider records。后到的桥接记录若同时命中两个旧 source，repository 会确定 winner，合并 project membership、artifact/note 引用、全文关联和 provenance，再删除重复 row；任一步失败均整体回滚。Semantic Scholar API key 只存在于请求头，不进入 URL、cache envelope 或数据库 provenance。
 
-普通网页的 raw HTML 不进入 SQLite：`snapshot_path` 只保存 content-addressed gzip 文件名，`snapshot_sha256` 校验解压内容，`extracted_text` 保存 Trafilatura 产生的纯文本。`locator` 只含文档类型、最终 URL 和 snapshot hash；绝对 snapshot root 由配置持有，不通过 repository model 的公开序列化返回。
+普通网页的 raw HTML 不进入 SQLite：`snapshot_path` 只保存 content-addressed gzip 文件名，`snapshot_sha256` 校验解压内容，`extracted_text` 保存 Trafilatura 产生的纯文本。research source 的内部 `locator` 只含文档类型、最终 URL 和 snapshot hash；绝对 snapshot root 由配置持有，不通过公开序列化返回。
+
+全文层继续使用兼容表名 `papers`，但 v3 增加的 `source_kind/canonical_uri/locator` 现在参与真实读写：PDF 的 `path` 仍是内部绝对路径，Web document 使用不可执行的 `pragent-web://<source-id>` 逻辑 locator。两类正文都进入相同 `chunks`、embedding、hybrid search 与 evidence 流程。`attach_indexed_paper()` 在一个事务内加入 content SHA identity、合并重复 canonical source 并更新 `indexed_paper_id`；跨 repository/store 无法成为单个 SQLite 连接事务，因此索引先提交、source CAS 后关联，CAS 失败时可由同一幂等入口重跑恢复。
 
 ## Artifact 与 revision
 

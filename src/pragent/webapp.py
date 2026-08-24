@@ -44,17 +44,32 @@ def _web_directory() -> str:
     return _web_resource_directory("legacy")
 
 
+def _public_document_location(document) -> str:
+    if getattr(document, "source_kind", "pdf") == "web":
+        return getattr(document, "canonical_uri", None) or "网页来源"
+    return Path(str(getattr(document, "path", ""))).name
+
+
 def _hit_dict(h) -> dict:
     return {
         "paper_id": h.paper_id,
         "title": h.title,
         "authors": h.authors,
         "year": h.year,
-        "path": h.path,
+        "path": _public_document_location(h),
+        "source_kind": getattr(h, "source_kind", "pdf"),
+        "canonical_uri": getattr(h, "canonical_uri", None),
         "page": h.page,
         "score": round(h.score, 6),
         "text": h.text,
     }
+
+
+def _public_answer_source(source: dict) -> dict:
+    result = dict(source)
+    if not result.get("web") and "path" in result:
+        result["path"] = Path(str(result["path"])).name
+    return result
 
 
 def _web_paper_dict(p) -> dict:
@@ -73,6 +88,9 @@ def _sse_event(event: dict) -> dict:
     data = dict(event)
     if data.get("type") == "context":
         data["hits"] = [_hit_dict(h) for h in data.get("hits", [])]
+        data["sources"] = [
+            _public_answer_source(source) for source in data.get("sources", [])
+        ]
         data["web_papers"] = [_web_paper_dict(p) for p in data.get("web_papers", [])]
     return data
 
@@ -230,7 +248,7 @@ def create_app(
         return {
             "papers": papers,
             "chunks": chunks,
-            "library_dir": s.meta_get("library_dir"),
+            "library_configured": bool(s.meta_get("library_dir")),
             "embed_model": s.meta_get("embed_model") or _embedder().model_name,
             "llm_configured": _llm().is_configured,
         }
@@ -251,7 +269,9 @@ def create_app(
                     "title": p.title,
                     "authors": p.authors,
                     "year": p.year,
-                    "path": p.path,
+                    "path": _public_document_location(p),
+                    "source_kind": p.source_kind,
+                    "canonical_uri": p.canonical_uri,
                     "page_count": p.page_count,
                     "chunk_count": chunk_count,
                     "has_text": p.has_text,
@@ -290,7 +310,7 @@ def create_app(
             network_slots.release()
         return {
             "answer": answer,
-            "sources": sources,
+            "sources": [_public_answer_source(source) for source in sources],
             "retrieval_only": retrieval_only,
             "hits": [_hit_dict(h) for h in hits],
             "web_papers": [

@@ -276,6 +276,51 @@ class Store:
             rows = self._conn.execute("SELECT * FROM papers ORDER BY id").fetchall()
         return iter([self._paper_from_row(r) for r in rows])
 
+    def set_paper_document_metadata(
+        self,
+        paper_id: int,
+        *,
+        source_kind: str,
+        canonical_uri: Optional[str],
+        locator: Any,
+    ) -> Paper:
+        """更新通用 document locator；发生变化时使检索 snapshot cache 失效。"""
+
+        if source_kind not in {"pdf", "web"}:
+            raise ValueError("source_kind 必须是 pdf 或 web")
+        try:
+            locator_json = json.dumps(
+                locator,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("locator 必须可序列化为 JSON") from exc
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT * FROM papers WHERE id=?", (paper_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"索引文档不存在：{paper_id}")
+            if (
+                row["source_kind"] != source_kind
+                or row["canonical_uri"] != canonical_uri
+                or row["locator"] != locator_json
+            ):
+                self._conn.execute(
+                    """
+                    UPDATE papers SET source_kind=?, canonical_uri=?, locator=?
+                    WHERE id=?
+                    """,
+                    (source_kind, canonical_uri, locator_json, paper_id),
+                )
+                self._bump_revision_locked()
+                row = self._conn.execute(
+                    "SELECT * FROM papers WHERE id=?", (paper_id,)
+                ).fetchone()
+        return self._paper_from_row(row)
+
     # ---------- chunks ----------
 
     def replace_chunks(self, paper_id: int, chunks: list[Chunk]) -> None:
@@ -293,13 +338,29 @@ class Store:
             )
 
     def _upsert_paper_locked(self, paper: Paper, chunks: Optional[list[Chunk]]) -> int:
+        if paper.source_kind not in {"pdf", "web"}:
+            raise ValueError("paper source_kind 必须是 pdf 或 web")
+        try:
+            locator_json = json.dumps(
+                paper.locator,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("paper locator 必须可序列化为 JSON") from exc
         self._conn.execute(
-            """INSERT INTO papers (path, sha256, title, authors, year, page_count, has_text, indexed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO papers (
+                   path, sha256, title, authors, year, page_count, has_text,
+                   indexed_at, source_kind, canonical_uri, locator
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
                    sha256=excluded.sha256, title=excluded.title, authors=excluded.authors,
                    year=excluded.year, page_count=excluded.page_count,
-                   has_text=excluded.has_text, indexed_at=excluded.indexed_at""",
+                   has_text=excluded.has_text, indexed_at=excluded.indexed_at,
+                   source_kind=excluded.source_kind,
+                   canonical_uri=excluded.canonical_uri,
+                   locator=excluded.locator""",
             (
                 paper.path,
                 paper.sha256,
@@ -309,6 +370,9 @@ class Store:
                 paper.page_count,
                 int(paper.has_text),
                 paper.indexed_at,
+                paper.source_kind,
+                paper.canonical_uri,
+                locator_json,
             ),
         )
         # DO UPDATE 分支不更新连接级 last_insert_rowid，必须按 path 回查。
@@ -396,7 +460,8 @@ class Store:
                 ).fetchall()
                 rows = self._conn.execute(
                     """SELECT c.id AS chunk_id, c.paper_id, c.page, c.text, c.embedding,
-                              p.title, p.authors, p.year, p.path
+                              p.title, p.authors, p.year, p.path, p.source_kind,
+                              p.canonical_uri, p.locator
                        FROM chunks c JOIN papers p ON p.id = c.paper_id
                        WHERE c.embedding IS NOT NULL
                        ORDER BY c.id"""
@@ -417,6 +482,9 @@ class Store:
                 path=r["path"],
                 page=r["page"],
                 text=r["text"],
+                source_kind=r["source_kind"],
+                canonical_uri=r["canonical_uri"],
+                locator=json.loads(r["locator"]),
             )
             for r in rows
         )
@@ -449,7 +517,8 @@ class Store:
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT c.id AS chunk_id, c.paper_id, c.page, c.text,
-                           p.title, p.authors, p.year, p.path
+                           p.title, p.authors, p.year, p.path, p.source_kind,
+                           p.canonical_uri, p.locator
                     FROM chunks c JOIN papers p ON p.id = c.paper_id
                     WHERE c.id IN ({marks})""",
                 ids,
@@ -471,6 +540,9 @@ class Store:
                     page=r["page"],
                     text=r["text"],
                     score=0.0,
+                    source_kind=r["source_kind"],
+                    canonical_uri=r["canonical_uri"],
+                    locator=json.loads(r["locator"]),
                 )
             )
         return hits
@@ -1030,6 +1102,9 @@ class Store:
             page_count=row["page_count"],
             has_text=bool(row["has_text"]),
             indexed_at=row["indexed_at"],
+            source_kind=row["source_kind"],
+            canonical_uri=row["canonical_uri"],
+            locator=json.loads(row["locator"]),
         )
 
 

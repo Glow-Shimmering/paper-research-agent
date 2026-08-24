@@ -1123,6 +1123,120 @@ class ResearchRepository(SQLiteRepository):
             row = self._ensure_source_for_paper_locked(connection, paper_id)
         return self._source_from_row(row)
 
+    def attach_indexed_paper(
+        self,
+        source_id: str,
+        paper_id: int,
+        *,
+        expected_version: Optional[int] = None,
+    ) -> ResearchSource:
+        """把 canonical source 与全文文档/content identity 原子关联。"""
+
+        with self._transaction(immediate=True) as connection:
+            source = self._require_row_locked(
+                connection, "research_sources", source_id, "研究来源"
+            )
+            if expected_version is not None and int(source["version"]) != expected_version:
+                raise RecordVersionConflictError(
+                    f"研究来源 {source_id} 版本冲突：期望 {expected_version}，"
+                    f"当前 {source['version']}"
+                )
+            paper = self._require_row_locked(connection, "papers", paper_id, "索引文档")
+            linked = connection.execute(
+                "SELECT * FROM research_sources WHERE indexed_paper_id=?",
+                (paper_id,),
+            ).fetchone()
+            identity = connection.execute(
+                """
+                SELECT rs.* FROM source_identities si
+                JOIN research_sources rs ON rs.id=si.source_id
+                WHERE si.identity_kind='content_sha256' AND si.normalized_value=?
+                """,
+                (paper["sha256"],),
+            ).fetchone()
+            candidates = {
+                row["id"]: row
+                for row in (source, linked, identity)
+                if row is not None
+            }
+            if linked is not None:
+                winner_id = linked["id"]
+            elif identity is not None and identity["indexed_paper_id"] is not None:
+                winner_id = identity["id"]
+            else:
+                winner_id = source_id
+            for candidate_id in sorted(candidates):
+                if candidate_id != winner_id:
+                    self._merge_source_locked(connection, winner_id, candidate_id)
+
+            current = connection.execute(
+                "SELECT * FROM research_sources WHERE id=?", (winner_id,)
+            ).fetchone()
+            chosen_paper_id = current["indexed_paper_id"] or paper_id
+            chosen_paper = self._require_row_locked(
+                connection, "papers", chosen_paper_id, "索引文档"
+            )
+            existing_identity = connection.execute(
+                """
+                SELECT source_id FROM source_identities
+                WHERE identity_kind='content_sha256' AND normalized_value=?
+                """,
+                (chosen_paper["sha256"],),
+            ).fetchone()
+            if existing_identity is None:
+                has_identity = connection.execute(
+                    "SELECT 1 FROM source_identities WHERE source_id=? LIMIT 1",
+                    (winner_id,),
+                ).fetchone()
+                connection.execute(
+                    """
+                    INSERT INTO source_identities(
+                        id, source_id, identity_kind, normalized_value,
+                        is_primary, created_at
+                    ) VALUES (?, ?, 'content_sha256', ?, ?, ?)
+                    """,
+                    (
+                        _new_id("identity"),
+                        winner_id,
+                        chosen_paper["sha256"],
+                        0 if has_identity else 1,
+                        _now_iso(),
+                    ),
+                )
+            elif existing_identity["source_id"] != winner_id:
+                raise SourceIdentityConflictError(
+                    f"content_sha256:{chosen_paper['sha256']} 已属于来源 "
+                    f"{existing_identity['source_id']}"
+                )
+            canonical_key = current["canonical_key"]
+            primary = connection.execute(
+                """
+                SELECT identity_kind, normalized_value FROM source_identities
+                WHERE source_id=? AND is_primary=1
+                """,
+                (winner_id,),
+            ).fetchone()
+            if primary:
+                canonical_key = f"{primary['identity_kind']}:{primary['normalized_value']}"
+            connection.execute(
+                """
+                UPDATE research_sources SET indexed_paper_id=?, content_sha256=?,
+                    canonical_key=?, status='ready', updated_at=?, version=version+1
+                WHERE id=?
+                """,
+                (
+                    chosen_paper_id,
+                    chosen_paper["sha256"],
+                    canonical_key,
+                    _now_iso(),
+                    winner_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM research_sources WHERE id=?", (winner_id,)
+            ).fetchone()
+        return self._source_from_row(row)
+
     def add_paper_to_project(
         self,
         project_id: str,

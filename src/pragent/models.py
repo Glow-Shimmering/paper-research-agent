@@ -16,6 +16,9 @@ class Paper:
     page_count: int
     has_text: bool
     indexed_at: str
+    source_kind: str = "pdf"
+    canonical_uri: Optional[str] = None
+    locator: Any = field(default_factory=dict, repr=False, compare=False)
 
 
 @dataclass
@@ -113,6 +116,9 @@ class SearchHit:
     page: int
     text: str
     score: float
+    source_kind: str = "pdf"
+    canonical_uri: Optional[str] = None
+    locator: Any = field(default_factory=dict, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,9 @@ class SearchCorpusItem:
     path: str
     page: int
     text: str
+    source_kind: str = "pdf"
+    canonical_uri: Optional[str] = None
+    locator: Any = field(default_factory=dict, repr=False, compare=False)
 
 
 @dataclass(frozen=True)

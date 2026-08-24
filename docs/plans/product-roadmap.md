@@ -260,7 +260,7 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 - [x] Step 8：定义 provider/normalized-source contract 和 deterministic identity merge；将现有 arXiv 实现迁入 adapter。
 - [x] Step 9：实现 Semantic Scholar/Crossref adapters、fixture cache、rate limit/backoff、可选认证和 provider provenance。
 - [x] Step 10：实现 SSRF-safe Web fetch、gzip content-addressed snapshots、Trafilatura extraction 与 metadata normalization。
-- [ ] Step 11：让网页正文和下载 PDF 进入现有 chunk/embed/search/evidence 管线；source 关联 indexed paper，API/UI 不暴露 snapshot/主机路径。
+- [x] Step 11：让网页正文和下载 PDF 进入现有 chunk/embed/search/evidence 管线；source 关联 indexed paper，API/UI 不暴露 snapshot/主机路径。
 - [ ] Step 12：实现 Discover/Library HTMX 页面：多 provider 聚合、dedupe badges、加入项目、下载/抓取/index 状态和错误恢复。
 
 **Gate：** 同一 DOI/arXiv work 的多 provider 结果只显示一个 canonical source；恶意/私网/过大/错误 MIME URL 被拒绝；本地 PDF 与网页正文可被同一次 hybrid search 命中。

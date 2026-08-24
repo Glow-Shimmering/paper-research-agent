@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ artifact.title }} · PRAgent{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}/deep-reads">← 返回单篇精读</a></p>
+<section class="hero"><div><p class="eyebrow">Deep read card</p><h1>{{ artifact.title }}</h1><p>revision {{ revision.revision_number if revision else 0 }}{% if revision_public and revision_public.model %} · {{ revision_public.model }}{% endif %}</p></div></section>
+{% if freshness.stale %}<div class="notice error">来源已更新：当前卡片已过期，但历史版本和证据仍可查看。</div>{% endif %}
+<div id="deep-read-state">
+  {% include "fragments/deep_read_state.html" %}
+</div>
+<section class="panel">
+  <div class="section-heading"><h2>版本历史</h2><span>{{ history|length }} 个 revision</span></div>
+  <div class="history-list">
+  {% for item in history %}
+    <a href="/ui/projects/{{ project.id }}/deep-reads/{{ artifact.id }}?revision_id={{ item.id }}">revision {{ item.revision_number }} · {{ item.created_by }} · {{ item.created_at }}</a>
+  {% else %}<p class="empty">尚无版本</p>{% endfor %}
+  </div>
+</section>
+{% endblock %}

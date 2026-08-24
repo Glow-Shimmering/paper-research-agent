@@ -69,6 +69,17 @@ button.danger { background: #fff0ee; color: var(--danger); }
 .empty { padding: 16px; background: #f8fafc; border-radius: 9px; text-align: center; font-size: 13px; }
 .error-panel { max-width: 680px; margin: 80px auto; border-color: #fecdca; }
 .back { font-size: 13px; }
+.deep-read-fields { display: grid; gap: 14px; }
+.deep-read-field { scroll-margin-top: 20px; }
+.field-text { margin: 12px 0; line-height: 1.75; white-space: pre-wrap; }
+.deep-read-field details { margin-top: 12px; }
+.deep-read-field textarea { width: 100%; min-height: 150px; margin: 10px 0; }
+.evidence-drawer { margin-top: 12px; display: grid; gap: 10px; }
+.evidence-drawer blockquote { margin: 0; padding: 12px 14px; background: #f8fafc; border-left: 3px solid var(--primary); border-radius: 8px; }
+.evidence-drawer pre { max-height: 280px; overflow: auto; white-space: pre-wrap; font: inherit; }
+.quote { white-space: pre-wrap; }
+.progress-card progress { width: 100%; }
+.history-list { display: grid; gap: 8px; }
 code { padding: 2px 5px; background: #eef2f6; border-radius: 4px; }
 @media (max-width: 800px) { .workspace-grid { grid-template-columns: 1fr; } .question-edit { grid-template-columns: 62px minmax(0, 1fr); } .question-edit button { grid-column: 2; } }
 @media (max-width: 560px) { .topbar { height: auto; min-height: 58px; padding: 10px 16px; gap: 10px; flex-wrap: wrap; } .topbar nav { width: 100%; gap: 12px; overflow-x: auto; white-space: nowrap; } .page { width: min(100% - 20px, 1120px); margin-top: 18px; } .panel { padding: 16px; } .hero, .section-heading { align-items: flex-start; flex-direction: column; } .editable-item { grid-template-columns: 1fr; } .paper-row { align-items: flex-start; flex-direction: column; } }

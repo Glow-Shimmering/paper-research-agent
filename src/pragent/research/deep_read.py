@@ -73,6 +73,17 @@ class DeepReadUsage:
 
 
 @dataclass(frozen=True)
+class DeepReadFieldDraft:
+    field: DeepReadField
+    evidence: dict[str, Evidence]
+    model: Optional[str]
+    usage: dict[str, Any]
+    finish_reason: Optional[str]
+    prompt_version: str
+    schema_version: int
+
+
+@dataclass(frozen=True)
 class DeepReadDraft:
     card: DeepReadCard
     evidence: dict[str, Evidence]
@@ -95,6 +106,7 @@ class DeepReadWorkflow:
         *,
         budget: Optional[DeepReadBudget] = None,
         retrieval: Optional[Callable[[int, str, int], list[Any]]] = None,
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> None:
         self.store = store
         self.embedder = embedder
@@ -106,6 +118,7 @@ class DeepReadWorkflow:
             )
         )
         self.usage = DeepReadUsage()
+        self.on_progress = on_progress
         self._metadata: list[dict[str, Any]] = []
 
     def generate(self, paper_id: int) -> DeepReadDraft:
@@ -114,9 +127,11 @@ class DeepReadWorkflow:
             raise DeepReadError(f"索引文档不存在：{paper_id}")
         mapped: dict[str, DeepReadField] = {}
         evidence: dict[str, Evidence] = {}
-        for field_name in DEEP_READ_FIELD_ORDER:
+        for index, field_name in enumerate(DEEP_READ_FIELD_ORDER, start=1):
             candidates = self._retrieve_field(paper_id, field_name, evidence)
             mapped[field_name] = self._map_field(field_name, candidates)
+            if self.on_progress is not None:
+                self.on_progress(index, len(DEEP_READ_FIELD_ORDER))
         card = self._reduce_card(mapped)
         self._ensure_refs_were_retrieved(card, evidence)
         return DeepReadDraft(
@@ -133,14 +148,24 @@ class DeepReadWorkflow:
 
     def generate_field(
         self, paper_id: int, field_name: str
-    ) -> tuple[DeepReadField, dict[str, Evidence], dict[str, Any]]:
+    ) -> DeepReadFieldDraft:
         if field_name not in DEEP_READ_FIELD_ORDER:
             raise ValueError("未知精读字段")
         evidence: dict[str, Evidence] = {}
         candidates = self._retrieve_field(paper_id, field_name, evidence)
         result = self._map_field(field_name, candidates)
         self._ensure_field_refs(result, evidence)
-        return result, evidence, self._aggregate_usage()
+        return DeepReadFieldDraft(
+            field=result,
+            evidence=evidence,
+            model=getattr(self.llm, "model", None),
+            usage=self._aggregate_usage(),
+            finish_reason=(
+                self._metadata[-1].get("finish_reason") if self._metadata else None
+            ),
+            prompt_version=DEEP_READ_PROMPT_VERSION,
+            schema_version=DEEP_READ_SCHEMA_VERSION,
+        )
 
     def _retrieve_field(
         self,

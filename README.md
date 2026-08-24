@@ -12,6 +12,7 @@
 - 持久研究项目：创建 project、编辑/排序研究问题、从现有本地论文库选择来源，刷新或重启后恢复
 - 多来源发现：arXiv、Semantic Scholar、Crossref 聚合检索与 deterministic dedupe；普通网页经 SSRF-safe fetch 保存可追溯 snapshot
 - 统一全文：下载 PDF 与网页抽取正文共用 chunk/embed/hybrid-search/evidence 管线
+- 单篇精读：SQLite 后台任务生成九栏证据卡，支持进度、原文抽屉、单栏重生成、人工 revision、历史与 stale 提示
 - 证据链：单篇检索、页面/相邻分块深读、稳定 evidence ID、固定证据与引用校验
 - 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景
 - CLI 与本地 Web 界面双入口（统一命令名 `pra`）

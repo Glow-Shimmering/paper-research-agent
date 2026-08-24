@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}单篇精读 · {{ project.title }}{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}">← 返回项目</a></p>
+<section class="hero"><div><p class="eyebrow">Deep reads</p><h1>单篇精读</h1><p>后台生成九栏证据卡，英文原文保持不翻译。</p></div></section>
+<section class="panel">
+  <div class="section-heading"><h2>项目来源</h2><span>{{ sources|length }} 项</span></div>
+  <div class="result-list">
+  {% for membership in sources %}
+    {% set source = membership.source %}
+    {% set artifact = artifacts.get(source.id) %}
+    <article class="result-card">
+      <div><h3>{{ source.title or "未命名来源" }}</h3><p class="muted">{{ source.authors|join(', ') }}{% if source.year %} · {{ source.year }}{% endif %}</p></div>
+      {% if artifact %}
+        <span class="badge {% if artifact.stale %}failed{% else %}ready{% endif %}">{% if artifact.stale %}已过期{% else %}revision {{ artifact.current_revision_number }}{% endif %}</span>
+        <a class="button" href="/ui/projects/{{ project.id }}/deep-reads/{{ artifact.id }}">查看精读卡</a>
+      {% elif source.indexed_paper_id %}
+        <form hx-post="/ui/projects/{{ project.id }}/sources/{{ source.id }}/deep-reads" hx-target="#deep-read-action" hx-swap="innerHTML" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit">生成精读卡</button>
+        </form>
+      {% else %}<span class="muted">需先完成全文索引</span>{% endif %}
+    </article>
+  {% else %}<div class="empty">请先把已索引来源加入项目。</div>{% endfor %}
+  </div>
+  <div id="deep-read-action" aria-live="polite"></div>
+</section>
+{% endblock %}

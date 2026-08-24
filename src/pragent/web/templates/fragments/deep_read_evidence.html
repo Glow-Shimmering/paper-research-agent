@@ -1,0 +1,9 @@
+<div class="evidence-drawer">
+{% for item in items %}
+  <blockquote>
+    <p><strong>{{ item.source_title }}</strong>{% if item.page %} · 第 {{ item.page }} 页{% else %} · 网页无页码{% endif %}{% if item.stale %} · 已过期{% endif %}</p>
+    <p class="quote">“{{ item.quote }}”</p>
+    <details><summary>查看上下文</summary><pre>{{ item.context }}</pre></details>
+  </blockquote>
+{% else %}<p class="muted">本栏没有证据。</p>{% endfor %}
+</div>

@@ -19,6 +19,7 @@ from .indexer import index_library
 from .ingestion import FetchPolicy, SafeFetcher, SnapshotStore, WebIngestService
 from .jobs import JobQueue, WorkerPool
 from .llm import LLMClient, LLMError
+from .research import DeepReadArtifactService, DeepReadWorkflow
 from .search import hybrid_search
 from .security import (
     api_key_matches,
@@ -36,7 +37,7 @@ from .sources import (
 from .sources.actions import SourceActionService
 from .storage import JobRepository, ResearchRepository
 from .store import Store
-from .web.routes import register_project_routes
+from .web.routes import register_artifact_routes, register_project_routes
 from .web.routes.discovery import register_discovery_routes
 from .websearch import WebSearchError, search_papers
 
@@ -140,9 +141,12 @@ def create_app(
         nonlocal owned_worker_pool
         queue = _job_queue()
         queue.recover_startup()
+        handlers = _default_job_handlers()
+        if job_handlers is not None:
+            handlers.update(dict(job_handlers))
         owned_worker_pool = WorkerPool(
             queue,
-            job_handlers or {},
+            handlers,
             worker_count=(
                 config.JOB_WORKERS if job_worker_count is None else job_worker_count
             ),
@@ -198,6 +202,48 @@ def create_app(
                     raise RuntimeError("内存 Store 必须显式注入 JobRepository")
                 owned_job_repository = JobRepository(db_path)
             return JobQueue(owned_job_repository)
+
+    def _default_job_handlers():
+        def deep_read_handler(context, payload):
+            context.report_progress(0, 9)
+            workflow = DeepReadWorkflow(
+                _store(),
+                _embedder(),
+                _llm(),
+                on_progress=context.report_progress,
+            )
+            saved = DeepReadArtifactService(_research_repository()).generate_and_save(
+                str(payload["project_id"]),
+                str(payload["source_id"]),
+                workflow,
+                expected_artifact_version=int(payload["expected_artifact_version"]),
+            )
+            return {
+                "artifact_id": saved.artifact.id,
+                "revision_id": saved.revision.id,
+            }
+
+        def deep_read_field_handler(context, payload):
+            context.report_progress(0, 1)
+            workflow = DeepReadWorkflow(_store(), _embedder(), _llm())
+            saved = DeepReadArtifactService(_research_repository()).regenerate_field(
+                str(payload["project_id"]),
+                str(payload["artifact_id"]),
+                str(payload["field_name"]),
+                workflow,
+                expected_artifact_version=int(payload["expected_artifact_version"]),
+                base_revision_id=str(payload["base_revision_id"]),
+            )
+            context.report_progress(1, 1)
+            return {
+                "artifact_id": saved.artifact.id,
+                "revision_id": saved.revision.id,
+            }
+
+        return {
+            "deep_read": deep_read_handler,
+            "deep_read_field": deep_read_field_handler,
+        }
 
     def _embedder():
         nonlocal owned_embedder
@@ -547,6 +593,13 @@ def create_app(
         app,
         store_factory=_store,
         repository_factory=_research_repository,
+        templates_directory=_web_resource_directory("templates"),
+    )
+    register_artifact_routes(
+        app,
+        repository_factory=_research_repository,
+        job_queue_factory=_job_queue,
+        store_factory=_store,
         templates_directory=_web_resource_directory("templates"),
     )
     register_discovery_routes(

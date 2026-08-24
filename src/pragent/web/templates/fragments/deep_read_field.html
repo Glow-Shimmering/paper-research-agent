@@ -1,0 +1,21 @@
+<section class="panel deep-read-field" id="field-{{ field.name }}">
+  <div class="section-heading"><h2>{{ field.label }}</h2><span>{% if field.insufficient_evidence %}证据不足{% else %}证据 {{ field.evidence_count }} 条{% endif %}</span></div>
+  <div class="field-text">{{ field.text }}</div>
+  {% if revision and field.evidence_count %}
+  <button class="secondary" hx-get="/ui/projects/{{ project.id }}/deep-reads/{{ artifact.id }}/revisions/{{ revision.id }}/fields/{{ field.name }}/evidence" hx-target="#evidence-{{ field.name }}" hx-swap="innerHTML">展开证据</button>
+  <div id="evidence-{{ field.name }}"></div>
+  {% endif %}
+  {% if current %}
+  <details><summary>人工编辑</summary>
+    <form method="post" hx-post="/ui/projects/{{ project.id }}/deep-reads/{{ artifact.id }}/fields/{{ field.name }}/edit" hx-target="#field-{{ field.name }}" hx-swap="outerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="expected_artifact_version" value="{{ artifact.version }}">
+      <textarea name="text" maxlength="12000" required>{{ field.text }}</textarea><button type="submit">保存为新版本</button>
+    </form>
+  </details>
+  {% if not freshness.stale %}
+  <form class="inline-form" method="post" hx-post="/ui/projects/{{ project.id }}/deep-reads/{{ artifact.id }}/fields/{{ field.name }}/regenerate" hx-target="#deep-read-state" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="secondary">重新生成本栏</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</section>

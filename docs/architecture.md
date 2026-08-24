@@ -40,6 +40,7 @@ flowchart LR
 - `sources/semantic_scholar.py` / `sources/crossref.py`：字段白名单 adapter、可选认证与 provider 原始记录规范化。
 - `sources/http.py` / `sources/discovery.py`：不缓存请求密钥的 fixture/response cache、线程安全节流、429/5xx 有界退避，以及多 provider 聚合与部分失败隔离。
 - `sources/actions.py` / `web/routes/discovery.py`：显式网页/PDF 获取动作、公开错误映射，以及 Discover/Library JSON + HTMX vertical slice。
+- `research/artifacts.py` / `web/routes/artifacts.py`：Deep Read 全量/单栏生成、人工 revision、严格 evidence 保存，以及九栏 JSON API、HTMX polling、证据抽屉与历史版本。
 - `ingestion/safe_fetch.py`：逐跳 URL/DNS 校验并把连接固定到已验证公网 IP；限制重定向、总超时、MIME 与响应大小。
 - `ingestion/snapshots.py` / `html_extract.py` / `web.py`：原始 HTML 的 content-addressed gzip 原子快照、Trafilatura 文本抽取及可恢复 source 状态。
 - `ingestion/indexing.py`：把网页纯文本或已下载 PDF 适配为通用 `Paper(source_kind/canonical_uri/locator)`，再复用同一 chunk/embed/index/source-link 事务边界。

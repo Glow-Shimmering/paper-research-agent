@@ -1,0 +1,15 @@
+{% if job and not job.terminal %}
+<section class="panel progress-card" hx-get="/ui/projects/{{ project.id }}/deep-reads/{{ artifact.id }}/state?job_id={{ job.id }}" hx-trigger="every 1s" hx-target="#deep-read-state" hx-swap="innerHTML">
+  <h2>后台生成中</h2><p>{{ job.status }} · {{ job.progress_current }}/{{ job.progress_total or '—' }}</p>
+  {% if job.progress_total %}<progress value="{{ job.progress_current }}" max="{{ job.progress_total }}"></progress>{% endif %}
+</section>
+{% elif job and job.error %}
+<div class="notice error">{{ job.error.message }}</div>
+{% endif %}
+{% if revision %}
+<div class="deep-read-fields">
+{% for field in fields %}
+  {% include "fragments/deep_read_field.html" %}
+{% endfor %}
+</div>
+{% elif not job or job.terminal %}<div class="empty panel">精读任务尚未生成有效 revision。</div>{% endif %}

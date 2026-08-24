@@ -1,5 +1,6 @@
 """PRAgent 结构化研究工作流。"""
 
+from .artifacts import DeepReadArtifactService, SavedDeepRead
 from .deep_read import (
     DEEP_READ_PROMPT_VERSION,
     DeepReadBudget,
@@ -23,6 +24,7 @@ __all__ = [
     "DEEP_READ_FIELD_ORDER",
     "DEEP_READ_PROMPT_VERSION",
     "DEEP_READ_SCHEMA_VERSION",
+    "DeepReadArtifactService",
     "DeepReadBudget",
     "DeepReadBudgetExceeded",
     "DeepReadCard",
@@ -32,4 +34,5 @@ __all__ = [
     "DeepReadSchemaError",
     "DeepReadWorkflow",
     "EvidenceRef",
+    "SavedDeepRead",
 ]

@@ -91,13 +91,14 @@ stateDiagram-v2
 
 ## 持久化与可观测性
 
-SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并为研究工作区建立持久化边界：
+SQLite schema v6 保留 v1/v2 的论文索引、证据与 Agent 审计表，并为研究工作区建立持久化边界：
 
 - v1：`papers/chunks/meta`；
 - v2：`evidence/agent_runs/agent_events`；
 - v3：通用 document locator、project、research question、canonical source/identity、provider record 与 project-source membership；
 - v4：artifact、不可变 revision、artifact-evidence link 与 research note；
-- v5：可恢复 job、Agent session/transcript 与冻结的 pending action。
+- v5：可恢复 job、Agent session/transcript 与冻结的 pending action；
+- v6：每个 project/source 唯一的逻辑 `deep_read` artifact。
 
 每个 migration 都有名称、版本和 SHA-256 checksum 记录。磁盘数据库只在声明版本和已有表结构通过检查后迁移；升级前使用 SQLite backup API 生成一致备份，所有待执行步骤位于同一个 `BEGIN IMMEDIATE` 事务中。任一步、外键检查或历史校验失败都会回滚，未来版本数据库则不做修改并拒绝打开。研究对象与 job 使用独立行 `version` 做 compare-and-swap，不复用只服务于搜索缓存失效的 `index_revision`。完整关系与 freshness 规则见 [数据模型](data-model.md)。
 
@@ -111,7 +112,7 @@ SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 
 ### 旧 Pagent 显式导入
 
-`import_pagent.py` 只接受已验证的 Pagent schema v1/v2，默认 dry-run，且从不在旧目录上运行 migration。执行导入时先建立文件 hash 清单，再通过 SQLite online backup 把包含已提交 WAL 的一致快照写入目标同盘 staging；路径重写、v5 migration、计数/外键/quick-check 和文件二次 hash 均在 staging 完成。只有全部通过后才原子重命名为目标目录，目标已存在或中途失败均 fail closed。
+`import_pagent.py` 只接受已验证的 Pagent schema v1/v2，默认 dry-run，且从不在旧目录上运行 migration。执行导入时先建立文件 hash 清单，再通过 SQLite online backup 把包含已提交 WAL 的一致快照写入目标同盘 staging；路径重写、v6 migration、计数/外键/quick-check 和文件二次 hash 均在 staging 完成。只有全部通过后才原子重命名为目标目录，目标已存在或中途失败均 fail closed。
 
 ## 测试边界
 

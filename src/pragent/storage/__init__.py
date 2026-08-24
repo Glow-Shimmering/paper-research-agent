@@ -14,9 +14,14 @@ from .migrations import (
     SchemaMigrationError,
     migrate_schema,
 )
-from .research_repository import ResearchRepository, SourceIdentityConflictError
+from .research_repository import (
+    ArtifactValidationError,
+    ResearchRepository,
+    SourceIdentityConflictError,
+)
 
 __all__ = [
+    "ArtifactValidationError",
     "LATEST_SCHEMA_VERSION",
     "JobIdempotencyConflictError",
     "JobRepository",

@@ -168,7 +168,7 @@ def test_existing_v2_database_is_backed_up_then_migrated(tmp_path):
     report = store.migration_report
 
     assert report.previous_version == 2
-    assert report.applied_versions == (3, 4, 5)
+    assert report.applied_versions == tuple(range(3, LATEST_SCHEMA_VERSION + 1))
     assert report.backup_path is not None and report.backup_path.is_file()
     assert store.meta_get("schema_version") == str(LATEST_SCHEMA_VERSION)
     assert store.paper_by_id(1).title == "旧论文"

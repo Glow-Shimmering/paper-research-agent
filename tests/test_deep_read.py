@@ -6,6 +6,7 @@ from helpers import FakeEmbedder, make_paper
 from pragent.models import Chunk
 from pragent.research import (
     DEEP_READ_FIELD_ORDER,
+    DeepReadArtifactService,
     DeepReadBudget,
     DeepReadBudgetExceeded,
     DeepReadCard,
@@ -13,6 +14,7 @@ from pragent.research import (
     DeepReadSchemaError,
     DeepReadWorkflow,
 )
+from pragent.storage import ResearchRepository
 from pragent.store import Store
 
 
@@ -124,6 +126,31 @@ def test_deep_read_field_retrieval_map_reduce_and_metadata_are_bounded(tmp_path)
         for _, field in draft.card.ordered_fields()
         for ref in field.evidence_refs
     )
+    store.close()
+
+
+def test_deep_read_validates_and_atomically_saves_revision_metadata(tmp_path):
+    store, paper_id = _store(tmp_path)
+    repository = ResearchRepository(store.db_path)
+    project = repository.create_project("精读保存")
+    source = repository.ensure_source_for_paper(paper_id)
+    repository.add_project_source(project.id, source.id)
+    workflow = DeepReadWorkflow(store, FakeEmbedder(), ScriptedDeepReadLLM())
+
+    saved = DeepReadArtifactService(repository).generate_and_save(
+        project.id, source.id, workflow
+    )
+
+    assert saved.artifact.current_revision_number == 1
+    assert saved.revision.created_by == "model"
+    assert saved.revision.model == "scripted-deep-read"
+    assert saved.revision.usage["llm_calls"] == 10
+    assert repository.artifact_freshness(saved.artifact.id).stale is False
+    links = repository.list_artifact_evidence(saved.revision.id)
+    assert {link.field_path for link in links} == {
+        f"$.{name}" for name in DEEP_READ_FIELD_ORDER
+    }
+    repository.close()
     store.close()
 
 

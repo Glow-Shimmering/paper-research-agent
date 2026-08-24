@@ -1,7 +1,10 @@
+import sqlite3
+
 import pytest
 
 from pragent.models import Chunk, Paper
 from pragent.storage import (
+    ArtifactValidationError,
     RecordVersionConflictError,
     ResearchRepository,
     SourceIdentityConflictError,
@@ -239,6 +242,133 @@ def test_artifact_revisions_evidence_links_and_freshness(tmp_path):
             {"stale": True},
             expected_artifact_version=current_artifact.version,
             created_by="user",
+        )
+    repo.close()
+    store.close()
+
+
+def test_validated_deep_read_revision_rejects_forged_scope_quote_and_fingerprint(tmp_path):
+    db_path = tmp_path / "validated-artifacts.db"
+    store = Store(db_path)
+    first_paper = store.upsert_paper(
+        make_paper("first.pdf", sha256="first-sha"),
+        [Chunk(None, 0, 0, 1, "Exact original quote. Supporting context.")],
+    )
+    second_paper = store.upsert_paper(
+        make_paper("second.pdf", sha256="second-sha"),
+        [Chunk(None, 0, 0, 2, "Other source quote.")],
+    )
+    first_evidence = store.pin_evidence(store.paper_chunks(first_paper)[0].id)
+    second_evidence = store.pin_evidence(store.paper_chunks(second_paper)[0].id)
+
+    repo = ResearchRepository(db_path)
+    project = repo.create_project("严格精读")
+    first_source = repo.ensure_source_for_paper(first_paper)
+    second_source = repo.ensure_source_for_paper(second_paper)
+    repo.add_project_source(project.id, first_source.id)
+    repo.add_project_source(project.id, second_source.id)
+    artifact = repo.create_artifact(
+        project.id, "deep_read", source_id=first_source.id, title="严格卡片"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.create_artifact(
+            project.id, "deep_read", source_id=first_source.id, title="重复卡片"
+        )
+
+    fingerprint = repo.artifact_freshness(artifact.id).current_fingerprint
+    content = {
+        "research_question": {
+            "text": "论文研究什么？",
+            "evidence_refs": [
+                {"evidence_id": first_evidence.id, "quote": "Exact original quote."}
+            ],
+            "insufficient_evidence": False,
+        }
+    }
+    revision = repo.append_validated_deep_read_revision(
+        artifact.id,
+        content,
+        expected_artifact_version=artifact.version,
+        expected_source_fingerprint=fingerprint,
+        created_by="model",
+        evidence_refs=[
+            (
+                first_evidence.id,
+                "$.research_question",
+                0,
+                "Exact original quote.",
+            )
+        ],
+        model="deepseek-chat",
+        usage={"total_tokens": 42, "response_ids": ["resp-1"]},
+        finish_reason="stop",
+        prompt_version="deep-read-v1",
+        schema_version=1,
+    )
+    assert revision.model == "deepseek-chat"
+    assert revision.usage["total_tokens"] == 42
+    assert revision.source_fingerprint == fingerprint
+
+    current = repo.get_artifact(artifact.id)
+    attempts = [
+        (
+            [(second_evidence.id, "$.research_question", 0, "Other source quote.")],
+            fingerprint,
+            "不属于",
+        ),
+        (
+            [(first_evidence.id, "$.research_question", 0, "Fabricated quote")],
+            fingerprint,
+            "精确子串",
+        ),
+        (
+            [(first_evidence.id, "$.unknown", 0, "Exact original quote.")],
+            fingerprint,
+            "field_path",
+        ),
+        (
+            [(first_evidence.id, "$.research_question", 0, "Exact original quote.")],
+            "forged-fingerprint",
+            "内容已变化",
+        ),
+    ]
+    for refs, supplied_fingerprint, message in attempts:
+        with pytest.raises(ArtifactValidationError, match=message):
+            repo.append_validated_deep_read_revision(
+                artifact.id,
+                content,
+                expected_artifact_version=current.version,
+                expected_source_fingerprint=supplied_fingerprint,
+                created_by="model",
+                evidence_refs=refs,
+                model="deepseek-chat",
+                usage={},
+                finish_reason="stop",
+                prompt_version="deep-read-v1",
+                schema_version=1,
+            )
+        assert repo.get_artifact(artifact.id).version == current.version
+        assert repo.list_artifact_revisions(artifact.id).total == 1
+
+    store.upsert_paper(
+        make_paper("first.pdf", sha256="first-changed"),
+        [Chunk(None, first_paper, 0, 1, "Changed content")],
+    )
+    with pytest.raises(ArtifactValidationError, match="内容已变化"):
+        repo.append_validated_deep_read_revision(
+            artifact.id,
+            content,
+            expected_artifact_version=current.version,
+            expected_source_fingerprint=fingerprint,
+            created_by="model",
+            evidence_refs=[
+                (first_evidence.id, "$.research_question", 0, "Exact original quote.")
+            ],
+            model="deepseek-chat",
+            usage={},
+            finish_reason="stop",
+            prompt_version="deep-read-v1",
+            schema_version=1,
         )
     repo.close()
     store.close()

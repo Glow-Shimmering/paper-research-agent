@@ -31,6 +31,10 @@ class SourceIdentityConflictError(RuntimeError):
     """同一个规范化 identity 已属于另一个 canonical source。"""
 
 
+class ArtifactValidationError(RuntimeError):
+    """Artifact revision 的来源、证据或模型审计信息不满足保存合同。"""
+
+
 _UNSET = object()
 _PROJECT_STATUSES = frozenset({"active", "archived"})
 _SOURCE_KINDS = frozenset({"paper", "web"})
@@ -39,6 +43,19 @@ _ARTIFACT_STATUSES = frozenset({"draft", "generating", "ready", "failed", "archi
 _ARTIFACT_CREATORS = frozenset({"user", "model", "system", "import"})
 _IDENTITY_KINDS = frozenset({"doi", "arxiv", "url", "content_sha256"})
 _NOTE_SCOPES = frozenset({"project", "source", "evidence"})
+_DEEP_READ_FIELD_PATHS = frozenset(
+    {
+        "$.research_question",
+        "$.related_work",
+        "$.core_method",
+        "$.contributions",
+        "$.datasets_and_experiments",
+        "$.main_results",
+        "$.limitations",
+        "$.future_work",
+        "$.key_evidence",
+    }
+)
 
 
 class ResearchRepository(SQLiteRepository):
@@ -1504,6 +1521,20 @@ class ResearchRepository(SQLiteRepository):
             ).fetchone()
         return self._artifact_from_row(row) if row else None
 
+    def get_source_artifact(
+        self, project_id: str, source_id: str, artifact_type: str
+    ) -> Optional[ResearchArtifact]:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM research_artifacts
+                WHERE project_id=? AND source_id=? AND artifact_type=?
+                ORDER BY created_at, id LIMIT 1
+                """,
+                (project_id, source_id, artifact_type),
+            ).fetchone()
+        return self._artifact_from_row(row) if row else None
+
     def list_artifacts(
         self,
         project_id: str,
@@ -1648,6 +1679,160 @@ class ResearchRepository(SQLiteRepository):
                 ),
             )
             if not cursor.rowcount:  # BEGIN IMMEDIATE 下仅防御数据库触发器/损坏
+                raise RecordVersionConflictError(f"研究 artifact {artifact_id} 版本冲突")
+            row = connection.execute(
+                "SELECT * FROM artifact_revisions WHERE id=?", (revision_id,)
+            ).fetchone()
+        return self._revision_from_row(row)
+
+    def append_validated_deep_read_revision(
+        self,
+        artifact_id: str,
+        content: Any,
+        *,
+        expected_artifact_version: int,
+        expected_source_fingerprint: str,
+        created_by: str,
+        evidence_refs: Iterable[tuple[str, str, int, str]],
+        model: Optional[str],
+        usage: Any,
+        finish_reason: Optional[str],
+        prompt_version: str,
+        schema_version: int,
+        revision_id: Optional[str] = None,
+    ) -> ArtifactRevision:
+        """在同一事务验证 Deep Read scope/quote/fingerprint 并保存 revision。"""
+
+        _validate_choice(created_by, {"model", "system"}, "created_by")
+        if not isinstance(expected_source_fingerprint, str) or not expected_source_fingerprint:
+            raise ArtifactValidationError("必须提供生成开始时的 source fingerprint")
+        if not isinstance(model, str) or not model.strip():
+            raise ArtifactValidationError("模型 revision 必须保存真实 model metadata")
+        if not isinstance(usage, dict):
+            raise ArtifactValidationError("模型 revision 必须保存 usage metadata")
+        prompt_version = _required_text(prompt_version, "prompt_version")
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise ArtifactValidationError("schema_version 必须是正整数")
+        content_json = _json_dump(content)
+        usage_json = _json_dump(usage)
+        refs = tuple(evidence_refs)
+        revision_id = revision_id or _new_id("revision")
+        now = _now_iso()
+        with self._transaction(immediate=True) as connection:
+            artifact = connection.execute(
+                "SELECT * FROM research_artifacts WHERE id=?", (artifact_id,)
+            ).fetchone()
+            if artifact is None:
+                raise KeyError(f"研究 artifact 不存在：{artifact_id}")
+            if artifact["artifact_type"] != "deep_read" or artifact["source_id"] is None:
+                raise ArtifactValidationError("Deep Read revision 必须绑定单一来源")
+            if int(artifact["version"]) != expected_artifact_version:
+                raise RecordVersionConflictError(
+                    f"研究 artifact {artifact_id} 版本冲突：期望 "
+                    f"{expected_artifact_version}，当前 {artifact['version']}"
+                )
+            source = connection.execute(
+                """
+                SELECT rs.* FROM research_sources rs
+                JOIN project_sources ps ON ps.source_id=rs.id
+                WHERE ps.project_id=? AND rs.id=?
+                """,
+                (artifact["project_id"], artifact["source_id"]),
+            ).fetchone()
+            if source is None or source["indexed_paper_id"] is None:
+                raise ArtifactValidationError("Deep Read 来源未加入项目或尚未建立全文索引")
+            current_fingerprint = self._current_fingerprint_locked(connection, artifact)
+            if current_fingerprint != expected_source_fingerprint:
+                raise ArtifactValidationError("来源内容已变化，请重新生成精读卡")
+
+            seen: set[tuple[str, str]] = set()
+            validated_links: list[tuple[str, str, int]] = []
+            for evidence_id, field_path, ordinal, quote in refs:
+                if field_path not in _DEEP_READ_FIELD_PATHS:
+                    raise ArtifactValidationError("Deep Read evidence field_path 无效")
+                if not isinstance(ordinal, int) or ordinal < 0:
+                    raise ArtifactValidationError("Deep Read evidence ordinal 无效")
+                key = (field_path, evidence_id)
+                if key in seen:
+                    raise ArtifactValidationError("同一字段不能重复引用 evidence")
+                seen.add(key)
+                evidence = connection.execute(
+                    "SELECT * FROM evidence WHERE id=?", (evidence_id,)
+                ).fetchone()
+                if evidence is None:
+                    raise ArtifactValidationError("Deep Read 引用了不存在的 evidence")
+                if int(evidence["paper_id"] or -1) != int(source["indexed_paper_id"]):
+                    raise ArtifactValidationError("Evidence 不属于当前 Deep Read 来源")
+                paper = connection.execute(
+                    "SELECT * FROM papers WHERE id=?", (source["indexed_paper_id"],)
+                ).fetchone()
+                chunk = connection.execute(
+                    "SELECT * FROM chunks WHERE paper_id=? AND seq=?",
+                    (source["indexed_paper_id"], evidence["chunk_seq"]),
+                ).fetchone()
+                if (
+                    paper is None
+                    or chunk is None
+                    or paper["sha256"] != evidence["paper_sha256"]
+                    or int(chunk["page"]) != int(evidence["page"])
+                    or hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest()
+                    != evidence["chunk_text_sha256"]
+                ):
+                    raise ArtifactValidationError("Evidence 已过期，不能保存到新 revision")
+                if not isinstance(quote, str) or not quote or quote not in evidence["text"]:
+                    raise ArtifactValidationError("Evidence quote 不是原文的精确子串")
+                validated_links.append((evidence_id, field_path, ordinal))
+
+            revision_number = int(artifact["current_revision_number"]) + 1
+            parent = connection.execute(
+                """
+                SELECT id FROM artifact_revisions
+                WHERE artifact_id=? AND revision_number=?
+                """,
+                (artifact_id, revision_number - 1),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO artifact_revisions(
+                    id, artifact_id, revision_number, parent_revision_id, content,
+                    created_by, source_fingerprint, model, usage, finish_reason,
+                    prompt_version, schema_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    artifact_id,
+                    revision_number,
+                    parent["id"] if parent else None,
+                    content_json,
+                    created_by,
+                    current_fingerprint,
+                    model.strip(),
+                    usage_json,
+                    finish_reason,
+                    prompt_version,
+                    schema_version,
+                    now,
+                ),
+            )
+            for evidence_id, field_path, ordinal in validated_links:
+                connection.execute(
+                    """
+                    INSERT INTO artifact_evidence(
+                        artifact_revision_id, evidence_id, field_path, ordinal, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (revision_id, evidence_id, field_path, ordinal, now),
+                )
+            cursor = connection.execute(
+                """
+                UPDATE research_artifacts
+                SET current_revision_number=?, status='ready', updated_at=?, version=version+1
+                WHERE id=? AND version=?
+                """,
+                (revision_number, now, artifact_id, expected_artifact_version),
+            )
+            if not cursor.rowcount:
                 raise RecordVersionConflictError(f"研究 artifact {artifact_id} 版本冲突")
             row = connection.execute(
                 "SELECT * FROM artifact_revisions WHERE id=?", (revision_id,)

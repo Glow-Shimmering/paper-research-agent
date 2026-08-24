@@ -424,12 +424,25 @@ _MIGRATION_5 = Migration(
     ),
 )
 
+_MIGRATION_6 = Migration(
+    version=6,
+    name="unique_deep_read_per_project_source",
+    statements=(
+        """
+        CREATE UNIQUE INDEX idx_research_artifacts_deep_read_source
+        ON research_artifacts(project_id, source_id, artifact_type)
+        WHERE artifact_type='deep_read' AND source_id IS NOT NULL
+        """,
+    ),
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     _MIGRATION_1,
     _MIGRATION_2,
     _MIGRATION_3,
     _MIGRATION_4,
     _MIGRATION_5,
+    _MIGRATION_6,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 

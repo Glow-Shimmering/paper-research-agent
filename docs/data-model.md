@@ -62,6 +62,8 @@ erDiagram
 
 每个 revision 保存 `source_fingerprint`。单篇 artifact 的 fingerprint 来自关联 source 的当前 PDF/content/snapshot hash；项目级 artifact 来自排序后的全部 project source。当前 fingerprint 与保存值不一致时 artifact 为 stale，旧 revision 仍可读取。
 
+Deep Read 的模型 revision 使用更严格的原子保存入口：在同一个 `BEGIN IMMEDIATE` 中重新计算并核对生成开始时的 fingerprint，验证 evidence 属于 artifact 当前 indexed source、当前 chunk/hash 未过期、field path 属于固定九栏且 quote 是 evidence snapshot 的精确子串，然后一起提交 revision、全部 evidence links、artifact current pointer 以及 model/usage/finish reason/prompt/schema metadata。任一 forged ID、quote、跨来源 evidence 或生成期间 source 变化都会整体回滚。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

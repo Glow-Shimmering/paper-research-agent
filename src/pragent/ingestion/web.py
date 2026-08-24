@@ -69,6 +69,8 @@ class WebIngestService:
             )
             source = self.repository.upsert_merged_source(final_bundle)
             active_source_id = source.id
+            ready_metadata = {**source.metadata, **final_bundle.source.metadata}
+            ready_metadata.pop("last_error", None)
             source = self.repository.update_source(
                 source.id,
                 expected_version=source.version,
@@ -78,7 +80,7 @@ class WebIngestService:
                 canonical_url=fetched.final_url,
                 content_sha256=snapshot.sha256,
                 status="ready",
-                metadata={**source.metadata, **final_bundle.source.metadata},
+                metadata=ready_metadata,
                 locator={
                     "kind": "web_snapshot",
                     "final_url": fetched.final_url,
@@ -102,7 +104,7 @@ class WebIngestService:
         metadata = dict(current.metadata)
         metadata["last_error"] = {
             "code": str(code),
-            "message": str(error)[:500],
+            "message": "网页抓取或抽取失败，可在来源库中重试",
             "at": _now_iso(),
         }
         try:

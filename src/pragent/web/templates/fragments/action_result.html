@@ -1,0 +1,6 @@
+<div class="action-message {% if ok %}success{% else %}failure{% endif %}">
+  <strong>{% if ok %}完成{% else %}操作失败{% endif %}</strong>
+  <span>{{ message }}</span>
+  {% if error_code %}<code>{{ error_code }}</code>{% endif %}
+  {% if source %}<span>· {{ source.title or source.id }} · {{ source.status_label }}{% if source.indexed %} · 全文已索引{% endif %}</span>{% endif %}
+</div>

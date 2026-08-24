@@ -161,7 +161,9 @@ def _finalize_turn(
             {
                 "type": "pending",
                 "name": str(getattr(pending, "name", "")),
-                "summary": pending_action_description(session.ctx),
+                "summary": pending_action_description(
+                    session.ctx, include_local_paths=False
+                ),
                 "digest": str(getattr(pending, "digest", "")),
                 "action_id": str(getattr(pending, "action_id", "")),
             }

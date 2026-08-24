@@ -44,6 +44,8 @@ class CrossrefAdapter:
         query = str(query).strip()
         if not query:
             raise ValueError("query 不能为空")
+        if len(query) > 500:
+            raise ValueError("query 不能超过 500 字符")
         _validate_limit(limit)
         params = urllib.parse.urlencode(
             {
@@ -72,6 +74,8 @@ class CrossrefAdapter:
         ]
 
     def lookup(self, identifier: str) -> Optional[NormalizedSource]:
+        if len(str(identifier)) > 500:
+            raise ValueError("identifier 不能超过 500 字符")
         doi = normalize_doi(identifier)
         if doi is None:
             raise ValueError("identifier 不是有效 DOI")

@@ -59,6 +59,8 @@ class DiscoveryService:
         query = str(query).strip()
         if not query:
             raise ValueError("query 不能为空")
+        if len(query) > 500:
+            raise ValueError("query 不能超过 500 字符")
         if (
             isinstance(limit_per_provider, bool)
             or not isinstance(limit_per_provider, int)
@@ -106,7 +108,7 @@ class DiscoveryService:
                     failures.append(
                         ProviderFailure(
                             provider=name,
-                            message=f"{name} provider 失败：{exc}",
+                            message=f"{name} provider 内部错误",
                             code="provider_error",
                             retryable=False,
                         )

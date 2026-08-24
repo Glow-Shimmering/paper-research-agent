@@ -98,6 +98,13 @@ def test_multi_provider_discovery_dedupes_and_persists_all_provenance(tmp_path):
         "semantic_scholar": 1,
     }
     assert batch.failures[0].retryable is True
+    canonical_url = item.persisted.canonical_url
+    repeated = DiscoveryService(
+        [semantic, crossref], repository=repository
+    ).search("retrieval agents", limit_per_provider=5)
+    assert repeated.items[0].persisted.id == item.persisted.id
+    assert repeated.items[0].persisted.canonical_url == canonical_url
+    assert repository.list_sources().total == 1
     repository.close()
 
 

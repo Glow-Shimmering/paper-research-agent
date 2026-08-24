@@ -42,6 +42,8 @@ class SemanticScholarAdapter:
         query = str(query).strip()
         if not query:
             raise ValueError("query 不能为空")
+        if len(query) > 500:
+            raise ValueError("query 不能超过 500 字符")
         _validate_limit(limit)
         params = urllib.parse.urlencode(
             {"query": query, "limit": limit, "fields": _FIELDS}
@@ -67,6 +69,8 @@ class SemanticScholarAdapter:
         value = str(identifier).strip()
         if not value:
             raise ValueError("identifier 不能为空")
+        if len(value) > 500:
+            raise ValueError("identifier 不能超过 500 字符")
         doi = normalize_doi(value)
         arxiv_id = normalize_arxiv_id(value)
         if doi:

@@ -11,6 +11,9 @@ flowchart LR
     TUI --> Runtime["Agent Runtime"]
     Web --> Ask["检索问答"]
     Web --> Workspace["Project Workspace / HTMX"]
+    Web --> Discover["Discover / Library"]
+    Discover --> Providers["arXiv / S2 / Crossref / Web"]
+    Discover --> ResearchRepo
     Workspace --> ResearchRepo["ResearchRepository"]
     ResearchRepo --> Store
     Runtime --> Policy["ToolSpec + Policy"]
@@ -34,11 +37,12 @@ flowchart LR
 - `sources/arxiv.py`：有界 arXiv Atom adapter；`websearch.py` 仅保留旧调用合同的兼容门面。
 - `sources/semantic_scholar.py` / `sources/crossref.py`：字段白名单 adapter、可选认证与 provider 原始记录规范化。
 - `sources/http.py` / `sources/discovery.py`：不缓存请求密钥的 fixture/response cache、线程安全节流、429/5xx 有界退避，以及多 provider 聚合与部分失败隔离。
+- `sources/actions.py` / `web/routes/discovery.py`：显式网页/PDF 获取动作、公开错误映射，以及 Discover/Library JSON + HTMX vertical slice。
 - `ingestion/safe_fetch.py`：逐跳 URL/DNS 校验并把连接固定到已验证公网 IP；限制重定向、总超时、MIME 与响应大小。
 - `ingestion/snapshots.py` / `html_extract.py` / `web.py`：原始 HTML 的 content-addressed gzip 原子快照、Trafilatura 文本抽取及可恢复 source 状态。
 - `ingestion/indexing.py`：把网页纯文本或已下载 PDF 适配为通用 `Paper(source_kind/canonical_uri/locator)`，再复用同一 chunk/embed/index/source-link 事务边界。
 - `search.py`：PDF 与 Web document 共用 BM25、本地向量、RRF、一致 snapshot cache 和稳定 evidence。
-- `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 保留检索、SSE 问答与受控 Agent 兼容工作台，并增加持久研究项目入口。
+- `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 保留兼容工作台，并提供持久项目、Discover 与统一来源库。
 
 ## Run 生命周期
 
@@ -113,4 +117,4 @@ SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 - 37 个离线 JSON 场景用于回归状态机、预算和引用合同。
 - 场景使用脚本化模型与工具结果，不代表真实模型质量、提示注入抵抗能力或语义蕴含评测。
 
-下一阶段会在此基础上增加真实任务 benchmark、成本面板、多来源检索与笔记双链。
+Phase 3 的 provider 与网页测试全部使用 fixture/fake transport，不代表实时服务可用性。下一阶段将在此 source/document 底座上实现持久 worker 与证据验证的单篇精读卡。

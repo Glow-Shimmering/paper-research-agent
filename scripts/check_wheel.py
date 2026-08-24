@@ -17,6 +17,10 @@ REQUIRED = {
     "pragent/web/templates/base.html",
     "pragent/web/templates/projects.html",
     "pragent/web/templates/project_workspace.html",
+    "pragent/web/templates/discover.html",
+    "pragent/web/templates/library.html",
+    "pragent/web/templates/fragments/action_result.html",
+    "pragent/web/templates/fragments/discovery_results.html",
     "pragent/web/templates/fragments/questions.html",
     "pragent/web/templates/fragments/sources.html",
     "pragent/web/static/app.css",
@@ -77,6 +81,12 @@ with tempfile.TemporaryDirectory() as raw:
         workspace = client.get('/ui/projects')
         assert workspace.status_code == 200
         assert '研究项目' in workspace.text
+        discover = client.get('/ui/discover')
+        assert discover.status_code == 200
+        assert '多来源论文发现' in discover.text
+        library = client.get('/ui/library')
+        assert library.status_code == 200
+        assert '统一来源库' in library.text
     store.close()
 """
         subprocess.run([str(python), "-c", probe], check=True, env=child_env)

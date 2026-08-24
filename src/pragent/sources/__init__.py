@@ -1,5 +1,6 @@
 """Unified academic/web source provider contracts and adapters."""
 
+from .arxiv import ArxivAdapter
 from .base import (
     MergedSource,
     NormalizedSource,
@@ -20,6 +21,7 @@ from .identity import (
 from .semantic_scholar import SemanticScholarAdapter
 
 __all__ = [
+    "ArxivAdapter",
     "MergedSource",
     "NormalizedSource",
     "ProviderProvenance",

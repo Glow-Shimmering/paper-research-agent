@@ -73,7 +73,7 @@ def _retrieve(store, embedder, question: str, top: int, per_paper_cap: int, web:
     编号顺序：正文片段 → 论文库目录 → arXiv 联网结果。
     """
     hits = hybrid_search(store, embedder, question, top=top, per_paper_cap=per_paper_cap)
-    web_papers: list[WebPaper] = search_papers(question, limit=5) if web else []
+    web_papers: list[WebPaper] = search_papers(question[:500], limit=5) if web else []
     catalog_papers, catalog_total = _catalog_entries(store)
 
     blocks: list[str] = []

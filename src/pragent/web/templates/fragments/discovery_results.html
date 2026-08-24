@@ -1,0 +1,55 @@
+<div class="section-heading">
+  <div>
+    <p class="eyebrow">MERGED RESULTS</p>
+    <h2>“{{ query }}”的 canonical 结果（{{ results["items"]|length }}）</h2>
+  </div>
+  <a class="button secondary" href="/ui/library">打开来源库</a>
+</div>
+
+{% if results["failures"] %}
+<div class="warning-list">
+  {% for failure in results["failures"] %}
+  <p><strong>{{ failure.provider }}</strong>：{{ failure.message }}（{{ failure.code }}{% if failure.retryable %}，可重试{% endif %}）</p>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if results["items"] %}
+<div class="source-grid">
+  {% for item in results["items"] %}
+  {% set source = item.source %}
+  <article class="source-card">
+    <div class="badge-row">
+      {% for provider in item.providers %}<span class="badge provider">{{ provider }}</span>{% endfor %}
+      {% if item.duplicate_count %}<span class="badge dedupe">合并 {{ item.duplicate_count + 1 }} 条记录</span>{% endif %}
+      <span class="badge status {{ source.status }}">{{ source.status_label }}</span>
+    </div>
+    <h3>{{ source.title or "未命名来源" }}</h3>
+    <p class="muted">{{ source.authors|join("、") or "作者未知" }}{% if source.year %} · {{ source.year }}{% endif %}</p>
+    <p class="identity-line">
+      {% if source.doi %}<span>DOI {{ source.doi }}</span>{% endif %}
+      {% if source.arxiv_id %}<span>arXiv {{ source.arxiv_id }}</span>{% endif %}
+    </p>
+    <div class="action-row">
+      {% if selected_project_id %}
+      <form hx-post="/ui/projects/{{ selected_project_id }}/sources/{{ source.id }}" hx-target="#action-result" hx-swap="innerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">加入项目</button>
+      </form>
+      {% endif %}
+      {% if source.can_download and not source.indexed %}
+      <form hx-post="/ui/sources/{{ source.id }}/download" hx-target="#action-result" hx-swap="innerHTML">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="project_id" value="{{ selected_project_id }}">
+        <button type="submit">下载并索引 PDF</button>
+      </form>
+      {% elif source.indexed %}
+      <span class="success-text">全文已索引</span>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">没有可合并结果。可调整关键词，或查看上方 provider 错误。</div>
+{% endif %}

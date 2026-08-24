@@ -29,8 +29,6 @@ _TRACKING_QUERY_KEYS = frozenset(
         "gclid",
         "mc_cid",
         "mc_eid",
-        "ref",
-        "ref_src",
     }
 )
 _IDENTITY_PRIORITY = {"doi": 0, "arxiv": 1, "url": 2, "content_sha256": 3}
@@ -54,7 +52,7 @@ def normalize_doi(value: object) -> Optional[str]:
         if lowered.startswith(prefix):
             text = text[len(prefix) :].strip()
             break
-    text = text.strip().rstrip(".,;)").lower()
+    text = text.strip().lower()
     if not _DOI_RE.fullmatch(text) or any(character.isspace() for character in text):
         return None
     return text
@@ -243,7 +241,9 @@ def _merge_group(records: list[NormalizedSource]) -> MergedSource:
     def first_year() -> Optional[int]:
         return next((record.year for record in ordered if record.year is not None), None)
 
-    identity_map = {kind: value for kind, value in all_identities}
+    identity_map: dict[str, str] = {}
+    for identity_kind, normalized_value in all_identities:
+        identity_map.setdefault(identity_kind, normalized_value)
     representative = ordered[0]
     providers = tuple(sorted({record.provider for record in ordered}))
     combined_metadata = dict(representative.metadata)

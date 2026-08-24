@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}来源库 · PRAgent{% endblock %}
+{% block content %}
+<section class="hero compact">
+  <div>
+    <p class="eyebrow">LIBRARY</p>
+    <h1>统一来源库</h1>
+    <p>PDF 与 Web document 共用全文检索和 evidence；这里不显示主机路径、snapshot locator 或抽取全文。</p>
+  </div>
+  <a class="button" href="/ui/discover">发现新来源</a>
+</section>
+
+<section class="panel">
+  <form class="inline-form" method="get" action="/ui/library">
+    <input name="q" value="{{ q }}" maxlength="500" placeholder="标题、作者、DOI 或 arXiv ID">
+    <select name="source_kind">
+      <option value="" {% if not source_kind %}selected{% endif %}>全部类型</option>
+      <option value="paper" {% if source_kind == 'paper' %}selected{% endif %}>论文</option>
+      <option value="web" {% if source_kind == 'web' %}selected{% endif %}>网页</option>
+    </select>
+    <select name="status">
+      <option value="" {% if not status %}selected{% endif %}>全部状态</option>
+      {% for value, label in [('discovered','已发现'),('fetching','处理中'),('ready','可用'),('failed','失败'),('archived','已归档')] %}
+      <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">筛选</button>
+  </form>
+</section>
+
+<div id="library-action-result" aria-live="polite"></div>
+<section class="panel">
+  <div class="section-heading"><h2>来源（{{ page.total }}）</h2><span class="muted">当前 {{ sources|length }} 条</span></div>
+  {% if sources %}
+  <div class="source-grid">
+    {% for source in sources %}
+    <article class="source-card">
+      <div class="badge-row">
+        <span class="badge">{{ source.source_kind_label }}</span>
+        {% for provider in source.providers %}<span class="badge provider">{{ provider }}</span>{% endfor %}
+        <span class="badge status {{ source.status }}">{{ source.status_label }}</span>
+      </div>
+      <h3>{{ source.title or "未命名来源" }}</h3>
+      <p class="muted">{{ source.authors|join("、") or "作者未知" }}{% if source.year %} · {{ source.year }}{% endif %}</p>
+      <p class="identity-line">
+        {% if source.doi %}<span>DOI {{ source.doi }}</span>{% endif %}
+        {% if source.arxiv_id %}<span>arXiv {{ source.arxiv_id }}</span>{% endif %}
+        {% if source.canonical_url %}<a href="{{ source.canonical_url }}" target="_blank" rel="noopener noreferrer">来源页面</a>{% endif %}
+      </p>
+      <p>{% if source.indexed %}<span class="success-text">全文已索引</span>{% else %}<span class="muted">仅题录，尚无全文索引</span>{% endif %}</p>
+      {% if source.error_code %}<p class="error-inline">上次失败：{{ source.error_code }}</p>{% endif %}
+      <div class="action-row">
+        {% if (source.can_fetch or source.can_download) and (source.status == 'failed' or not source.indexed) %}
+        <form hx-post="/ui/library/{{ source.id }}/retry" hx-target="#library-action-result" hx-swap="innerHTML">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <select name="project_id">
+            <option value="">重试但暂不加入项目</option>
+            {% for project in projects %}<option value="{{ project.id }}">重试并加入：{{ project.title }}</option>{% endfor %}
+          </select>
+          <button type="submit">{% if source.status == 'failed' %}重试{% else %}获取全文{% endif %}</button>
+        </form>
+        {% endif %}
+        {% for project in projects %}
+        <form hx-post="/ui/projects/{{ project.id }}/sources/{{ source.id }}" hx-target="#library-action-result" hx-swap="innerHTML">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="secondary">加入 {{ project.title }}</button>
+        </form>
+        {% endfor %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">没有符合筛选条件的来源。</div>
+  {% endif %}
+
+  <nav class="pagination" aria-label="分页">
+    {% if page.offset > 0 %}<a class="button secondary" href="/ui/library?q={{ q|urlencode }}&amp;source_kind={{ source_kind|urlencode }}&amp;status={{ status|urlencode }}&amp;offset={{ [0, page.offset - page.limit]|max }}">上一页</a>{% endif %}
+    {% if page.offset + page.limit < page.total %}<a class="button secondary" href="/ui/library?q={{ q|urlencode }}&amp;source_kind={{ source_kind|urlencode }}&amp;status={{ status|urlencode }}&amp;offset={{ page.offset + page.limit }}">下一页</a>{% endif %}
+  </nav>
+</section>
+{% endblock %}

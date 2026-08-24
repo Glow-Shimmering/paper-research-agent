@@ -262,6 +262,26 @@ def test_list_papers_and_status(tmp_path):
     assert "论文 1 篇" in out
 
 
+def test_public_tool_results_do_not_expose_absolute_host_paths(monkeypatch, tmp_path):
+    notes = tmp_path / "private-notes"
+    monkeypatch.setattr("pragent.config.notes_dir", lambda: notes)
+    ctx = make_ctx(tmp_path, library_dir=tmp_path / "private-library")
+    (tmp_path / "private-library").mkdir()
+
+    search_result = execute_tool("local_search", {"query": "注意力", "top": 1}, ctx)
+    papers_result = execute_tool("list_papers", {}, ctx)
+    status_result = execute_tool("library_status", {}, ctx)
+    note_result = execute_tool(
+        "save_note", {"filename": "safe.md", "content": "note"}, ctx
+    )
+
+    serialized = "\n".join(
+        (search_result, papers_result, status_result, note_result)
+    )
+    assert str(tmp_path) not in serialized
+    assert "a.pdf" in serialized and "safe.md" in serialized
+
+
 def test_unknown_tool(tmp_path):
     ctx = make_ctx(tmp_path)
     out = execute_tool("no_such_tool", {}, ctx)

@@ -170,7 +170,7 @@ def _require_indexable_source(repository, source_id: str, *, expected_kind: str)
         raise KeyError(f"研究来源不存在：{source_id}")
     if source.source_kind != expected_kind:
         raise ValueError(f"来源 {source_id} 不是 {expected_kind} 类型")
-    if source.status not in {"ready", "discovered", "failed"}:
+    if source.status not in {"ready", "discovered", "fetching", "failed"}:
         raise ValueError(f"来源当前状态不能索引：{source.status}")
     return source
 

@@ -16,6 +16,7 @@ from .answer import answer_stream
 from .answer import ask as answer_ask
 from .embeddings import Embedder
 from .indexer import index_library
+from .ingestion import FetchPolicy, SafeFetcher, SnapshotStore, WebIngestService
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
 from .security import (
@@ -25,9 +26,17 @@ from .security import (
     ui_auth_matches,
     ui_auth_token,
 )
+from .sources import (
+    ArxivAdapter,
+    CrossrefAdapter,
+    DiscoveryService,
+    SemanticScholarAdapter,
+)
+from .sources.actions import SourceActionService
 from .storage import ResearchRepository
 from .store import Store
 from .web.routes import register_project_routes
+from .web.routes.discovery import register_discovery_routes
 from .websearch import WebSearchError, search_papers
 
 
@@ -101,12 +110,20 @@ def create_app(
     llm=None,
     api_key: str | None = None,
     research_repository=None,
+    source_providers=None,
+    web_fetcher=None,
+    snapshot_store=None,
+    pdf_downloader=None,
+    download_directory=None,
 ) -> FastAPI:
     """create_app(...) 可注入索引与研究 repository 依赖用于测试。"""
     owned_store: Store | None = None
     owned_research_repository: ResearchRepository | None = None
     owned_embedder = None
     owned_llm = None
+    owned_source_providers = None
+    owned_web_fetcher = None
+    owned_snapshot_store = None
     dependency_lock = threading.RLock()
     reindex_lock = threading.Lock()
     network_slots = threading.BoundedSemaphore(4)
@@ -163,6 +180,81 @@ def create_app(
             if owned_llm is None:
                 owned_llm = LLMClient(config.LLM_BASE_URL, config.LLM_API_KEY, config.LLM_MODEL)
             return owned_llm
+
+    def _source_providers():
+        nonlocal owned_source_providers
+        if source_providers is not None:
+            return tuple(source_providers)
+        with dependency_lock:
+            if owned_source_providers is None:
+                owned_source_providers = (
+                    ArxivAdapter(),
+                    SemanticScholarAdapter(
+                        api_key=config.SEMANTIC_SCHOLAR_API_KEY,
+                        cache_directory=config.PROVIDER_CACHE_DIR,
+                    ),
+                    CrossrefAdapter(
+                        contact_email=config.CROSSREF_EMAIL,
+                        cache_directory=config.PROVIDER_CACHE_DIR,
+                    ),
+                )
+            return owned_source_providers
+
+    def _discovery_service():
+        return DiscoveryService(
+            _source_providers(), repository=_research_repository()
+        )
+
+    def _web_ingest_service():
+        nonlocal owned_web_fetcher, owned_snapshot_store
+        with dependency_lock:
+            if web_fetcher is not None:
+                fetcher = web_fetcher
+            else:
+                if owned_web_fetcher is None:
+                    owned_web_fetcher = SafeFetcher(
+                        policy=FetchPolicy(
+                            max_redirects=config.WEB_FETCH_MAX_REDIRECTS,
+                            timeout_seconds=config.WEB_FETCH_TIMEOUT_SECONDS,
+                            max_response_bytes=config.WEB_FETCH_MAX_BYTES,
+                        )
+                    )
+                fetcher = owned_web_fetcher
+            if snapshot_store is not None:
+                snapshots = snapshot_store
+            else:
+                if owned_snapshot_store is None:
+                    owned_snapshot_store = SnapshotStore(
+                        config.SNAPSHOT_DIR,
+                        max_bytes=config.WEB_FETCH_MAX_BYTES,
+                    )
+                snapshots = owned_snapshot_store
+        return WebIngestService(
+            _research_repository(), fetcher=fetcher, snapshots=snapshots
+        )
+
+    def _action_service():
+        target_directory = download_directory
+        if target_directory is None:
+            target_directory = config.download_dir_override()
+        if target_directory is None:
+            configured_library = _store().meta_get("library_dir")
+            target_directory = (
+                Path(configured_library)
+                if configured_library
+                else config.LIBRARY_DIR / "papers"
+            )
+        kwargs = {}
+        if pdf_downloader is not None:
+            kwargs["downloader"] = pdf_downloader
+        return SourceActionService(
+            _research_repository(),
+            _store(),
+            _embedder(),
+            web_ingest=_web_ingest_service(),
+            download_directory=target_directory,
+            **kwargs,
+        )
 
     app = FastAPI(title="PRAgent", lifespan=lifespan)
 
@@ -368,7 +460,7 @@ def create_app(
 
     @app.get("/api/websearch")
     def api_websearch(
-        q: str = Query(..., min_length=1, max_length=2_000),
+        q: str = Query(..., min_length=1, max_length=500),
         top: int = Query(5, ge=1, le=10),
     ):
         if not q.strip():
@@ -419,6 +511,13 @@ def create_app(
         app,
         store_factory=_store,
         repository_factory=_research_repository,
+        templates_directory=_web_resource_directory("templates"),
+    )
+    register_discovery_routes(
+        app,
+        repository_factory=_research_repository,
+        discovery_service_factory=_discovery_service,
+        action_service_factory=_action_service,
         templates_directory=_web_resource_directory("templates"),
     )
     app.mount(

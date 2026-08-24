@@ -63,6 +63,15 @@ def _evidence_id(evidence: Any) -> Optional[str]:
     return str(value) if value is not None else None
 
 
+def _public_document_path(value: Any, *, source_kind: str = "pdf", canonical_uri=None) -> str:
+    if source_kind == "web" and canonical_uri:
+        return str(canonical_uri)
+    path = str(value or "")
+    if path.startswith("pragent-web://"):
+        return path
+    return Path(path).name
+
+
 def _evidence_to_dict(evidence: Any) -> dict[str, Any]:
     if evidence is None:
         return {}
@@ -96,6 +105,8 @@ def _evidence_to_dict(evidence: Any) -> dict[str, Any]:
     if stable_id is not None:
         data["evidence_id"] = stable_id
         data.pop("id", None)
+    if "path" in data:
+        data["path"] = _public_document_path(data["path"])
     return data
 
 
@@ -141,7 +152,11 @@ def _hit_to_dict(ctx: ToolContext, h: SearchHit) -> dict:
         "evidence_id": _evidence_id(evidence),
         "title": h.title,
         "year": h.year,
-        "path": h.path,
+        "path": _public_document_path(
+            h.path,
+            source_kind=getattr(h, "source_kind", "pdf"),
+            canonical_uri=getattr(h, "canonical_uri", None),
+        ),
         "page": h.page,
         "score": round(h.score, 4),
         "text": h.text[:300],
@@ -154,7 +169,11 @@ def _paper_to_dict(p: Any) -> dict:
         "title": _value(p, "title"),
         "authors": _value(p, "authors", default=[]),
         "year": _value(p, "year"),
-        "path": _value(p, "path"),
+        "path": _public_document_path(
+            _value(p, "path"),
+            source_kind=str(_value(p, "source_kind", default="pdf")),
+            canonical_uri=_value(p, "canonical_uri"),
+        ),
         "page_count": _value(p, "page_count"),
         "has_text": _value(p, "has_text"),
     }
@@ -227,10 +246,10 @@ def _download_paper(
     target_dir.mkdir(parents=True, exist_ok=True)
     try:
         path = download_pdf(url, target_dir)
-    except DownloadError as exc:
+    except DownloadError:
         return ToolResult.error(
             "download_failed",
-            f"下载失败：{exc}",
+            "PDF 下载失败，请检查 URL、网络与大小限制",
             retryable=True,
         )
     try:
@@ -241,24 +260,24 @@ def _download_paper(
             set_library_dir_if_missing=True,
             progress=lambda msg: None,
         )
-    except Exception as exc:
+    except Exception:
         return ToolResult.error(
             "download_index_failed",
-            f"已下载到 {path}，但索引失败：{exc}",
-            data={"path": str(path)},
+            f"已下载 {path.name}，但索引失败。",
+            data={"path": path.name},
         )
     if result["failed"]:
         return ToolResult.error(
             "download_index_failed",
-            f"已下载到 {path}，但索引失败；原有索引未清理。",
-            data={"path": str(path), "index_result": result},
+            f"已下载 {path.name}，但索引失败；原有索引未清理。",
+            data={"path": path.name, "index_result": result},
         )
     return ToolResult.success(
         message=(
-            f"已下载并索引：{path}（新增 {result['added']}，更新 {result['updated']}，"
+            f"已下载并索引：{path.name}（新增 {result['added']}，更新 {result['updated']}，"
             f"未变化 {result['unchanged']}）"
         ),
-        data={"path": str(path), "index_result": result},
+        data={"path": path.name, "index_result": result},
     )
 
 
@@ -274,20 +293,20 @@ def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> ToolResult:
     target = Path(dir) if dir else library_root
     try:
         target = validate_pdf_directory(target)
-    except RuntimeError as exc:
-        return ToolResult.error("invalid_library_directory", str(exc))
+    except RuntimeError:
+        return ToolResult.error("invalid_library_directory", "论文库目录无效或无法访问")
     if target != library_root.resolve():
         return ToolResult.error(
             "library_switch_refused",
             (
-                f"拒绝通过 Agent 切换论文库目录：{target}。"
+                "拒绝通过 Agent 切换论文库目录。"
                 "如需切换，请在终端显式运行 pra index <目录> --force。"
             ),
         )
     try:
         result = index_library(ctx.store, target, ctx.embedder, progress=lambda msg: None)
-    except Exception as exc:
-        return ToolResult.error("index_failed", f"索引失败：{exc}")
+    except Exception:
+        return ToolResult.error("index_failed", "索引失败，请在终端检查本地文件与日志")
     message = (
         f"索引完成：新增 {result['added']}，更新 {result['updated']}，"
         f"未变化 {result['unchanged']}，失败 {result['failed']}，"
@@ -308,11 +327,12 @@ def _list_papers(ctx: ToolContext, q: Optional[str] = None) -> str:
 
 def _library_status(ctx: ToolContext) -> str:
     papers, chunks = ctx.store.stats()
-    lib_dir = ctx.store.meta_get("library_dir") or "（未索引）"
+    library_configured = bool(ctx.store.meta_get("library_dir"))
     embed_model = ctx.store.meta_get("embed_model") or "（未索引）"
     return (
         f"论文 {papers} 篇，分块 {chunks} 条；"
-        f"论文目录：{lib_dir}；嵌入模型：{embed_model}"
+        f"论文目录：{'已配置' if library_configured else '未索引'}；"
+        f"嵌入模型：{embed_model}"
     )
 
 
@@ -347,8 +367,8 @@ def _save_note(ctx: ToolContext, filename: str, content: str) -> ToolResult:
         target = notes / f"{stem} ({i}){ext}"
     target.write_text(content, encoding="utf-8")
     return ToolResult.success(
-        message=f"已保存到 {target}",
-        data={"path": str(target)},
+        message=f"已保存：{target.name}",
+        data={"path": target.name},
     )
 
 
@@ -1069,10 +1089,10 @@ def _handler_result(value: Any) -> ToolResult:
 def _run_handler(spec: ToolSpec, args: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
     try:
         return _handler_result(spec.handler(ctx, **dict(args)))
-    except Exception as exc:
+    except Exception:
         return ToolResult.error(
             "tool_execution_failed",
-            f"工具执行失败：{exc}",
+            f"工具 {name} 执行失败，请检查本地日志",
             retryable=spec.external,
         )
 

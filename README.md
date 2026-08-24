@@ -10,12 +10,14 @@
 - 受控 Agent：显式 run 状态、调用预算、工具效果分类、写入/联网确认与可恢复执行
 - Web 端 Agent：SSE 流式对话、实时工具调用卡片、可视化确认票据、证据高亮与 run 审计侧栏
 - 持久研究项目：创建 project、编辑/排序研究问题、从现有本地论文库选择来源，刷新或重启后恢复
+- 多来源发现：arXiv、Semantic Scholar、Crossref 聚合检索与 deterministic dedupe；普通网页经 SSRF-safe fetch 保存可追溯 snapshot
+- 统一全文：下载 PDF 与网页抽取正文共用 chunk/embed/hybrid-search/evidence 管线
 - 证据链：单篇检索、页面/相邻分块深读、稳定 evidence ID、固定证据与引用校验
 - 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景
 - CLI 与本地 Web 界面双入口（统一命令名 `pra`）
 - 索引过程只读：解析元数据建库浏览，不改动已有 PDF；下载工具会新增或原子替换同 arXiv 编号文件
 
-设计细节见 [架构说明](docs/architecture.md)。
+设计细节见 [架构说明](docs/architecture.md)、[产品工作流](docs/product-workflows.md)与[来源抓取安全](docs/source-security.md)。
 
 ## 安装
 
@@ -45,6 +47,11 @@ pra serve
 | `PRA_LLM_API_KEY` | （空） | 留空则问答退回纯检索 |
 | `PRA_LLM_MODEL` | `deepseek-chat` | 问答模型名 |
 | `PRA_WEB_API_KEY` | （空） | Web API key；监听非本机地址时必须设置 |
+| `PRA_SEMANTIC_SCHOLAR_API_KEY` | （空） | 可选 Semantic Scholar Graph API key；留空仍可使用公开接口 |
+| `PRA_CROSSREF_EMAIL` | （空） | Crossref polite pool 联系邮箱 |
+| `PRA_WEB_FETCH_MAX_BYTES` | `10485760` | 普通网页原始 HTML byte 上限 |
+| `PRA_WEB_FETCH_TIMEOUT_SECONDS` | `20` | 网页抓取总超时秒数 |
+| `PRA_WEB_FETCH_MAX_REDIRECTS` | `5` | 网页抓取逐跳校验的最大重定向数 |
 | `PRA_EMBED_MODEL` | `BAAI/bge-small-zh-v1.5` | 嵌入模型（首次索引联网下载 ~100MB） |
 | `PRA_DATA_DIR` | `~/.pragent` | 独立数据目录；不会自动读取或修改旧 Pagent 数据 |
 | `PRA_DOWNLOAD_DIR` | （未设） | 对话下载目录；不设时使用显式配置的 `PRA_DATA_DIR`，否则用已索引论文库目录 |
@@ -75,15 +82,15 @@ pra --version                # 显示当前版本（版本号与 wheel 元数据
 
 Windows 下 CLI 会把标准输出和错误输出配置为 UTF-8，含数学符号等 Unicode 文本的检索结果可以直接输出或重定向到 UTF-8 文件。
 
-`pra serve` 默认只监听本机。主页保留原检索/问答/Agent/论文库兼容工作台，并提供「研究项目」入口；project/question/source membership 全部写入 SQLite，页面刷新与服务重启后仍可恢复。研究工作区使用服务端 Jinja 模板与 wheel 内置 HTMX，写表单采用 SameSite double-submit CSRF token；返回的本地论文项不暴露主机绝对路径。
+`pra serve` 默认只监听本机。主页保留原检索/问答/Agent/论文库兼容工作台，并提供「研究项目」「发现」「来源库」入口；project/question/source membership、canonical identity 与 provider provenance 全部写入 SQLite，页面刷新与服务重启后仍可恢复。Discover 可聚合 fixture-tested providers、显示 dedupe badges、把题录加入项目，并在用户显式操作后下载 arXiv PDF 或安全抓取普通网页；Library 显示 indexed/failed 状态并提供重试。研究工作区使用服务端 Jinja 模板与 wheel 内置 HTMX，写表单采用 SameSite double-submit CSRF token；JSON/UI 不返回主机绝对路径、snapshot locator、provider raw metadata 或抽取全文。
 
 使用 `--host 0.0.0.0`、非 loopback Host 或 HTTPS 反向代理时必须设置 `PRA_WEB_API_KEY`；Web 页面会在首次 API 请求时询问 key，并仅在当前浏览器会话中保存。直接远程监听还必须同时传入 `--ssl-certfile` 与 `--ssl-keyfile`，或让 HTTPS 反向代理转发到 `127.0.0.1`（并正确转发原始 scheme/host）。仅在可信隔离网络中，才可显式添加 `--allow-insecure-http` 使用明文 HTTP。
 
 ### 隐私边界
 
-PDF 解析、分块、BM25 和向量嵌入均在本地执行。`pra ask`、`pra chat` 和 `pra index --refine` 会把问题以及命中的论文片段或首页文本发送给 `PRA_LLM_BASE_URL` 指向的第三方服务；`--web`/`websearch` 会把查询词发送给 arXiv。敏感论文应使用可信的自托管兼容接口，或使用 `--no-llm` 纯检索模式。
+PDF 解析、网页正文抽取、分块、BM25 和向量嵌入均在本地执行。`pra ask`、`pra chat` 和 `pra index --refine` 会把问题以及命中的论文片段或首页文本发送给 `PRA_LLM_BASE_URL` 指向的第三方服务；`--web`/`websearch` 会把查询词发送给 arXiv；Discover 只在用户提交检索时把 query 发送给所选 provider，普通网页只在显式导入/重试时抓取。敏感论文应使用可信的自托管兼容接口，或使用 `--no-llm` 纯检索模式。
 
-联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Web 界面在检索/问答页勾选「联网（arXiv）」即可。Web 的「Agent」标签页与 `pra chat` 共享同一受控运行时：工具调用实时展示，联网或写入操作会弹出待确认卡片（含参数摘要与绑定摘要），点击「确认执行」后沿原始 `tool_call_id` 续跑，或点击「取消」终止；每次对话都会生成可审计的 run，可在侧栏回放结构化事件时间线。
+兼容联网检索基于 arXiv API（免费、无需 key，遵守 3 秒请求间隔）；Discover 另支持 Semantic Scholar 与 Crossref，所有自动测试使用注入 fixture，不以 fixture 宣称实时服务可用。普通网页每跳执行 DNS/IP SSRF 校验，只接受有界 HTML；raw HTML 作为 gzip snapshot 保存且绝不注入应用 DOM。Web 的「Agent」标签页与 `pra chat` 共享同一受控运行时：工具调用实时展示，联网或写入操作会弹出待确认卡片（含参数摘要与绑定摘要），点击「确认执行」后沿原始 `tool_call_id` 续跑，或点击「取消」终止；每次对话都会生成可审计的 run，可在侧栏回放结构化事件时间线。
 
 `pra chat` 为终端 Agent 界面（textual）。每个用户问题会创建一个持久 run，并按 `proposed → running → awaiting_confirmation → succeeded/failed/cancelled/blocked` 状态推进；轮次、工具调用、外部调用和引用修复都有硬预算。结构化事件只保存必要元数据、哈希、状态和结果摘要，便于定位失败与回放。
 
@@ -102,6 +109,7 @@ Python 3.11 可使用已验证的完整版本约束集复现开发环境；3.10/
 .venv\Scripts\python -m pip check
 .venv\Scripts\python -m pytest -q
 .venv\Scripts\python scripts\check_tmp_space.py
+.venv\Scripts\python scripts\smoke_research.py
 .venv\Scripts\python -m pip wheel . --no-deps --wheel-dir dist
 .venv\Scripts\python scripts\check_wheel.py dist
 ```

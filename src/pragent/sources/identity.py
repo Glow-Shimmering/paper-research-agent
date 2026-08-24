@@ -122,7 +122,10 @@ def canonicalize_url(value: object) -> str:
     host_display = f"[{host}]" if ":" in host else host
     netloc = host_display if port is None or default_port else f"{host_display}:{port}"
 
-    path = _normalize_percent_escapes(parsed.path or "/")
+    path = quote(
+        _normalize_percent_escapes(parsed.path or "/"),
+        safe="/:@-._~!$&'()*+,;=%",
+    )
     normalized_path = posixpath.normpath(path)
     if not normalized_path.startswith("/"):
         normalized_path = f"/{normalized_path}"

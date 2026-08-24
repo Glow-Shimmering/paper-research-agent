@@ -38,6 +38,9 @@ def test_normalize_doi_arxiv_url_and_content_hash():
     assert canonicalize_url(
         "HTTPS://Example.COM:443/reports/../paper/?utm_source=x&b=2&a=1#section"
     ) == "https://example.com/paper?a=1&b=2"
+    assert canonicalize_url("https://例子.测试/研究") == (
+        "https://xn--fsqu00a.xn--0zwm56d/%E7%A0%94%E7%A9%B6"
+    )
     with pytest.raises(ValueError, match="credentials"):
         canonicalize_url("https://user:pass@example.com/paper")
 

@@ -1,12 +1,24 @@
 from pathlib import Path
 
-from pragent.config import _env_or_default, _find_env_file
+import pytest
+
+from pragent.config import _env_or_default, _find_env_file, _positive_int_env
 
 
 def test_empty_environment_value_uses_default(monkeypatch):
     monkeypatch.setenv("PRA_TEST_DEFAULT", "")
 
     assert _env_or_default("PRA_TEST_DEFAULT", "fallback") == "fallback"
+
+
+def test_positive_integer_environment_limit(monkeypatch):
+    monkeypatch.setenv("PRA_TEST_LIMIT", "42")
+    assert _positive_int_env("PRA_TEST_LIMIT", 10) == 42
+    monkeypatch.setenv("PRA_TEST_LIMIT", "0")
+    with pytest.raises(RuntimeError, match="正整数"):
+        _positive_int_env("PRA_TEST_LIMIT", 10)
+    monkeypatch.delenv("PRA_TEST_LIMIT")
+    assert _positive_int_env("PRA_TEST_LIMIT", 10) == 10
 
 
 def test_find_env_file_prefers_explicit_relative_path(tmp_path):

@@ -657,8 +657,24 @@ class ResearchRepository(SQLiteRepository):
                     item[1],
                 ),
             )
+            identity_values: dict[str, str] = {}
+            for identity_kind, normalized_value in ordered_identities:
+                identity_values.setdefault(identity_kind, normalized_value)
             if ordered_identities:
                 primary_kind, primary_value = ordered_identities[0]
+                preferred_kind, separator, preferred_value = canonical_key.partition(":")
+                preferred = (preferred_kind, preferred_value)
+                if (
+                    separator
+                    and preferred in ordered_identities
+                    and {"doi": 0, "arxiv": 1, "url": 2, "content_sha256": 3}[
+                        preferred_kind
+                    ]
+                    == {"doi": 0, "arxiv": 1, "url": 2, "content_sha256": 3}[
+                        primary_kind
+                    ]
+                ):
+                    primary_kind, primary_value = preferred
                 final_key = f"{primary_kind}:{primary_value}"
                 connection.execute(
                     "UPDATE source_identities SET is_primary=0 WHERE source_id=?",
@@ -700,12 +716,12 @@ class ResearchRepository(SQLiteRepository):
                         source.title or current["title"],
                         authors_json if source.authors else current["authors"],
                         source.year if source.year is not None else current["year"],
-                        dict(ordered_identities).get("doi") or current["doi"],
-                        dict(ordered_identities).get("arxiv") or current["arxiv_id"],
-                        dict(ordered_identities).get("url")
+                        identity_values.get("doi") or current["doi"],
+                        identity_values.get("arxiv") or current["arxiv_id"],
+                        identity_values.get("url")
                         or source.canonical_url
                         or current["canonical_url"],
-                        dict(ordered_identities).get("content_sha256")
+                        identity_values.get("content_sha256")
                         or current["content_sha256"],
                         status if indexed_paper_id is None else "ready",
                         metadata_json,

@@ -34,6 +34,8 @@ flowchart LR
 - `sources/arxiv.py`：有界 arXiv Atom adapter；`websearch.py` 仅保留旧调用合同的兼容门面。
 - `sources/semantic_scholar.py` / `sources/crossref.py`：字段白名单 adapter、可选认证与 provider 原始记录规范化。
 - `sources/http.py` / `sources/discovery.py`：不缓存请求密钥的 fixture/response cache、线程安全节流、429/5xx 有界退避，以及多 provider 聚合与部分失败隔离。
+- `ingestion/safe_fetch.py`：逐跳 URL/DNS 校验并把连接固定到已验证公网 IP；限制重定向、总超时、MIME 与响应大小。
+- `ingestion/snapshots.py` / `html_extract.py` / `web.py`：原始 HTML 的 content-addressed gzip 原子快照、Trafilatura 文本抽取及可恢复 source 状态。
 - `search.py`：BM25 与本地向量的混合检索及一致快照缓存。
 - `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 保留检索、SSE 问答与受控 Agent 兼容工作台，并增加持久研究项目入口。
 
@@ -97,6 +99,8 @@ SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 ### Web 项目工作区边界
 
 `/ui/projects` 使用服务端 Jinja autoescape 与 wheel 内置 HTMX 2.0.8（MIT license 随资源打包），不依赖 Node/CDN。写表单必须同时通过同源检查、1MB body limit 和 HttpOnly/SameSite double-submit CSRF cookie；远程模式先通过 `X-PRA-Key` 换取不含原始 key 的 HttpOnly UI cookie。项目来源响应只返回题录、状态和安全 filename，不返回 `papers.path`、snapshot path 或抽取正文。project、question 与 source membership 均来自 SQLite repository，页面刷新或服务重启不依赖进程内状态。
+
+完整网页威胁模型、DNS pinning、snapshot 与 raw HTML 边界见 [来源抓取安全](source-security.md)。
 
 ### 旧 Pagent 显式导入
 

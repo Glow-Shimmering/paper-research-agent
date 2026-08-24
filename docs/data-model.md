@@ -46,6 +46,8 @@ erDiagram
 
 聚合结果通过 `upsert_merged_source()` 在一个 `BEGIN IMMEDIATE` 事务内写入 canonical row、identities 和 provider records。后到的桥接记录若同时命中两个旧 source，repository 会确定 winner，合并 project membership、artifact/note 引用、全文关联和 provenance，再删除重复 row；任一步失败均整体回滚。Semantic Scholar API key 只存在于请求头，不进入 URL、cache envelope 或数据库 provenance。
 
+普通网页的 raw HTML 不进入 SQLite：`snapshot_path` 只保存 content-addressed gzip 文件名，`snapshot_sha256` 校验解压内容，`extracted_text` 保存 Trafilatura 产生的纯文本。`locator` 只含文档类型、最终 URL 和 snapshot hash；绝对 snapshot root 由配置持有，不通过 repository model 的公开序列化返回。
+
 ## Artifact 与 revision
 
 `research_artifacts` 是稳定逻辑对象；`artifact_revisions` 是不可变版本：

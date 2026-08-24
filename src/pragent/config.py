@@ -16,6 +16,19 @@ def _env_or_default(name: str, default: str) -> str:
     return os.getenv(name) or default
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 必须是正整数") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} 必须是正整数")
+    return value
+
+
 def _find_env_file(explicit: Optional[str], cwd: Path, module_file: Path) -> Optional[Path]:
     """返回应加载的环境文件，不依赖包在文件系统中的固定层级。"""
     if explicit:
@@ -58,6 +71,10 @@ EMBED_MODEL = _env_or_default("PRA_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
 SEMANTIC_SCHOLAR_API_KEY = os.getenv("PRA_SEMANTIC_SCHOLAR_API_KEY", "")
 CROSSREF_EMAIL = os.getenv("PRA_CROSSREF_EMAIL", "")
 PROVIDER_CACHE_DIR = LIBRARY_DIR / "provider-cache"
+SNAPSHOT_DIR = LIBRARY_DIR / "snapshots"
+WEB_FETCH_MAX_BYTES = _positive_int_env("PRA_WEB_FETCH_MAX_BYTES", 10 * 1024 * 1024)
+WEB_FETCH_TIMEOUT_SECONDS = _positive_int_env("PRA_WEB_FETCH_TIMEOUT_SECONDS", 20)
+WEB_FETCH_MAX_REDIRECTS = _positive_int_env("PRA_WEB_FETCH_MAX_REDIRECTS", 5)
 
 
 def download_dir_override() -> Optional[Path]:

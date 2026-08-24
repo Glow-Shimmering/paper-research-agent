@@ -257,7 +257,7 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 ### Phase 3 — 多来源发现、去重与全文入库
 
-- [ ] Step 8：定义 provider/normalized-source contract 和 deterministic identity merge；将现有 arXiv 实现迁入 adapter。
+- [x] Step 8：定义 provider/normalized-source contract 和 deterministic identity merge；将现有 arXiv 实现迁入 adapter。
 - [ ] Step 9：实现 Semantic Scholar/Crossref adapters、fixture cache、rate limit/backoff、可选认证和 provider provenance。
 - [ ] Step 10：实现 SSRF-safe Web fetch、gzip content-addressed snapshots、Trafilatura extraction 与 metadata normalization。
 - [ ] Step 11：让网页正文和下载 PDF 进入现有 chunk/embed/search/evidence 管线；source 关联 indexed paper，API/UI 不暴露 snapshot/主机路径。

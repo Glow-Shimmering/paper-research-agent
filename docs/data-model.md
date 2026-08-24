@@ -42,7 +42,7 @@ erDiagram
 - `indexed_paper_id` 可空且唯一，把来源关联到现有全文索引；
 - Web snapshot 的路径只在内部表中保存，公开响应不得暴露主机路径。
 
-`ensure_source_for_paper()` 使用论文内容 SHA-256 幂等地把现有本地论文提升为 research source，供项目工作区选择。
+`ensure_source_for_paper()` 使用论文内容 SHA-256 幂等地把现有本地论文提升为 research source，供项目工作区选择。发现层统一返回 `NormalizedSource`，只使用 DOI → versionless arXiv ID → canonical URL → content SHA-256 作为确定性 identity；标题或作者相似度绝不自动合并。任意共享 identity 都会做传递式分组，canonical metadata 由固定 provider 优先级选择，而每条 provider provenance 均保留。
 
 ## Artifact 与 revision
 

@@ -33,6 +33,7 @@ flowchart LR
 - `storage/research_repository.py`：project/source/provenance/artifact revision/evidence link/note 的事务、分页与版本 CAS。
 - `storage/job_repository.py`：持久 job、幂等 enqueue、lease claim/renew/reap、progress/cancel/status CAS。
 - `jobs/queue.py` / `jobs/worker.py`：启动恢复、仅幂等重排、固定并发 worker、协作取消与 deadline 阶段边界。
+- `research/schemas.py` / `research/deep_read.py`：九栏严格 Pydantic schema、字段特定检索、map/reduce、全流程至多一次 JSON repair，以及 retrieval/context/LLM/token 预算。
 - `web/routes/projects.py`：`/api/v1` project JSON API 与 Jinja/HTMX project/question/source vertical slice。
 - `sources/base.py` / `sources/identity.py`：provider-neutral normalized source contract，以及 DOI → arXiv ID → canonical URL → content SHA 的确定性、可传递合并。
 - `sources/arxiv.py`：有界 arXiv Atom adapter；`websearch.py` 仅保留旧调用合同的兼容门面。

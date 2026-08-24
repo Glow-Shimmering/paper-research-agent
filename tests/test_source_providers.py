@@ -4,6 +4,9 @@ import pytest
 
 from pragent.sources.arxiv import ArxivAdapter, parse_arxiv_feed
 from pragent.sources.base import SourceProvider, SourceProviderError
+from pragent.sources.crossref import CrossrefAdapter
+from pragent.sources.http import HttpResponse, JsonHttpClient, RateLimiter
+from pragent.sources.semantic_scholar import SemanticScholarAdapter
 
 ARXIV_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
@@ -106,3 +109,95 @@ def test_arxiv_adapter_rejects_unbounded_or_invalid_inputs_before_request():
         adapter.search("x", limit=101)
     with pytest.raises(ValueError, match="arXiv"):
         adapter.lookup("not-an-id")
+
+
+def test_semantic_scholar_fixture_optional_auth_and_normalization():
+    payload = b'''{
+      "total": 1,
+      "data": [{
+        "paperId": "CorpusId:123",
+        "title": "Evidence First Agents",
+        "authors": [{"authorId": "1", "name": "Alice"}],
+        "year": 2025,
+        "abstract": "Grounded research.",
+        "externalIds": {"DOI": "10.1000/AGENT", "ArXiv": "2501.00001v2"},
+        "url": "https://www.semanticscholar.org/paper/123",
+        "openAccessPdf": {"url": "https://arxiv.org/pdf/2501.00001"}
+      }]
+    }'''
+    calls = []
+
+    def requester(url, headers, timeout, max_bytes):
+        calls.append((url, dict(headers)))
+        return HttpResponse(200, {"Content-Type": "application/json"}, payload)
+
+    client = JsonHttpClient(
+        "semantic_scholar", requester=requester, limiter=RateLimiter(0)
+    )
+    adapter = SemanticScholarAdapter(api_key="optional-secret", client=client)
+    item = adapter.search("agents", limit=3)[0]
+
+    assert item.provider_record_id == "CorpusId:123"
+    assert item.authors == ("Alice",)
+    assert item.doi == "10.1000/agent"
+    assert item.arxiv_id == "2501.00001"
+    assert item.pdf_url == "https://arxiv.org/pdf/2501.00001"
+    assert calls[0][1]["x-api-key"] == "optional-secret"
+    assert "optional-secret" not in calls[0][0]
+
+
+def test_crossref_fixture_polite_header_and_normalization():
+    payload = b'''{
+      "status": "ok",
+      "message": {"items": [{
+        "DOI": "10.5555/RAG.1",
+        "title": ["Retrieval Systems"],
+        "author": [{"given": "Alice", "family": "Chen"}],
+        "published-online": {"date-parts": [[2024, 7, 1]]},
+        "URL": "https://doi.org/10.5555/RAG.1",
+        "abstract": "<jats:p>Evidence &amp; retrieval.</jats:p>",
+        "link": [{"content-type": "application/pdf", "URL": "https://example.org/paper.pdf"}]
+      }]}
+    }'''
+    calls = []
+
+    def requester(url, headers, timeout, max_bytes):
+        calls.append((url, dict(headers)))
+        return HttpResponse(200, {}, payload)
+
+    adapter = CrossrefAdapter(
+        contact_email="researcher@example.com",
+        client=JsonHttpClient("crossref", requester=requester, limiter=RateLimiter(0)),
+    )
+    item = adapter.search("retrieval", limit=2)[0]
+
+    assert item.provider_record_id == "10.5555/rag.1"
+    assert item.title == "Retrieval Systems"
+    assert item.authors == ("Alice Chen",)
+    assert item.year == 2024
+    assert item.abstract == "Evidence & retrieval."
+    assert item.pdf_url == "https://example.org/paper.pdf"
+    assert "mailto:researcher@example.com" in calls[0][1]["User-Agent"]
+    assert "query.bibliographic=retrieval" in calls[0][0]
+
+
+def test_semantic_and_crossref_reject_malformed_fixture_shapes():
+    semantic = SemanticScholarAdapter(
+        client=JsonHttpClient(
+            "semantic_scholar",
+            requester=lambda *args: HttpResponse(200, {}, b'{"unexpected":[]}'),
+            limiter=RateLimiter(0),
+        )
+    )
+    with pytest.raises(SourceProviderError, match="data"):
+        semantic.search("x")
+
+    crossref = CrossrefAdapter(
+        client=JsonHttpClient(
+            "crossref",
+            requester=lambda *args: HttpResponse(200, {}, b'{"message":{}}'),
+            limiter=RateLimiter(0),
+        )
+    )
+    with pytest.raises(SourceProviderError, match="items"):
+        crossref.search("x")

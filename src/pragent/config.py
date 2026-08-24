@@ -55,6 +55,9 @@ LLM_API_KEY = os.getenv("PRA_LLM_API_KEY", "")
 LLM_MODEL = _env_or_default("PRA_LLM_MODEL", "deepseek-chat")
 WEB_API_KEY = os.getenv("PRA_WEB_API_KEY", "")
 EMBED_MODEL = _env_or_default("PRA_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
+SEMANTIC_SCHOLAR_API_KEY = os.getenv("PRA_SEMANTIC_SCHOLAR_API_KEY", "")
+CROSSREF_EMAIL = os.getenv("PRA_CROSSREF_EMAIL", "")
+PROVIDER_CACHE_DIR = LIBRARY_DIR / "provider-cache"
 
 
 def download_dir_override() -> Optional[Path]:

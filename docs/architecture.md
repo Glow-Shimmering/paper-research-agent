@@ -32,6 +32,8 @@ flowchart LR
 - `web/routes/projects.py`：`/api/v1` project JSON API 与 Jinja/HTMX project/question/source vertical slice。
 - `sources/base.py` / `sources/identity.py`：provider-neutral normalized source contract，以及 DOI → arXiv ID → canonical URL → content SHA 的确定性、可传递合并。
 - `sources/arxiv.py`：有界 arXiv Atom adapter；`websearch.py` 仅保留旧调用合同的兼容门面。
+- `sources/semantic_scholar.py` / `sources/crossref.py`：字段白名单 adapter、可选认证与 provider 原始记录规范化。
+- `sources/http.py` / `sources/discovery.py`：不缓存请求密钥的 fixture/response cache、线程安全节流、429/5xx 有界退避，以及多 provider 聚合与部分失败隔离。
 - `search.py`：BM25 与本地向量的混合检索及一致快照缓存。
 - `tui.py`：终端 Agent 入口（回答逐字流式渲染）；Web 保留检索、SSE 问答与受控 Agent 兼容工作台，并增加持久研究项目入口。
 

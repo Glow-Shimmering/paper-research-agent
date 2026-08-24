@@ -433,6 +433,399 @@ class ResearchRepository(SQLiteRepository):
             ).fetchone()
         return self._source_from_row(row)
 
+    def upsert_merged_source(self, merged: Any) -> ResearchSource:
+        """原子持久化 canonical metadata、全部 identity 和 provider provenance。
+
+        如果一条桥接记录同时命中多个既有 source，会先把 membership、artifact、
+        note、identity 和 provider record 合并到一个 winner，再删除重复 source。
+        """
+
+        canonical_key = _required_text(merged.canonical_key, "canonical_key")
+        source = merged.source
+        _validate_choice(source.source_kind, _SOURCE_KINDS, "source_kind")
+        identities = tuple(
+            (str(kind), _required_text(value, "normalized_value"))
+            for kind, value in merged.identities
+        )
+        for kind, _ in identities:
+            _validate_choice(kind, _IDENTITY_KINDS, "identity_kind")
+        if len(set(identities)) != len(identities):
+            raise ValueError("merged source 包含重复 identity")
+        records = tuple(merged.provenance)
+        if not records:
+            raise ValueError("merged source 必须保留 provider provenance")
+        authors_json = _json_dump([str(author) for author in source.authors])
+        metadata = dict(source.metadata)
+        if source.abstract:
+            metadata.setdefault("abstract", source.abstract)
+        if source.pdf_url:
+            metadata.setdefault("pdf_url", source.pdf_url)
+        metadata["providers"] = sorted({record.provider for record in records})
+        metadata_json = _json_dump(metadata)
+        serialized_records = tuple(
+            (
+                _required_text(record.provider, "provider"),
+                _required_text(record.record_id, "provider_record_id"),
+                record.record_url,
+                _json_dump(record.raw_metadata),
+                record.retrieved_at or _now_iso(),
+            )
+            for record in records
+        )
+
+        with self._transaction(immediate=True) as connection:
+            candidate_ids: set[str] = set()
+            by_key = connection.execute(
+                "SELECT id FROM research_sources WHERE canonical_key=?",
+                (canonical_key,),
+            ).fetchone()
+            if by_key:
+                candidate_ids.add(by_key["id"])
+            for kind, value in identities:
+                row = connection.execute(
+                    """
+                    SELECT source_id FROM source_identities
+                    WHERE identity_kind=? AND normalized_value=?
+                    """,
+                    (kind, value),
+                ).fetchone()
+                if row:
+                    candidate_ids.add(row["source_id"])
+            for provider, provider_record_id, *_ in serialized_records:
+                row = connection.execute(
+                    """
+                    SELECT source_id FROM source_records
+                    WHERE provider=? AND provider_record_id=?
+                    """,
+                    (provider, provider_record_id),
+                ).fetchone()
+                if row:
+                    candidate_ids.add(row["source_id"])
+            for column, value in (
+                ("doi", source.doi),
+                ("arxiv_id", source.arxiv_id),
+            ):
+                if value:
+                    row = connection.execute(
+                        f"SELECT id FROM research_sources WHERE {column}=?", (value,)
+                    ).fetchone()
+                    if row:
+                        candidate_ids.add(row["id"])
+
+            rows = [
+                connection.execute(
+                    "SELECT * FROM research_sources WHERE id=?", (source_id,)
+                ).fetchone()
+                for source_id in candidate_ids
+            ]
+            rows = [row for row in rows if row is not None]
+            created = not rows
+            if created:
+                source_id = _new_id("source")
+                now = _now_iso()
+                connection.execute(
+                    """
+                    INSERT INTO research_sources(
+                        id, canonical_key, source_kind, title, authors, year, doi,
+                        arxiv_id, canonical_url, content_sha256, status, metadata,
+                        locator, version, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', ?, '{}', 1, ?, ?)
+                    """,
+                    (
+                        source_id,
+                        canonical_key,
+                        source.source_kind,
+                        source.title,
+                        authors_json,
+                        source.year,
+                        source.doi,
+                        source.arxiv_id,
+                        source.canonical_url,
+                        source.content_sha256,
+                        metadata_json,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                winner = min(
+                    rows,
+                    key=lambda row: (
+                        0 if row["canonical_key"] == canonical_key else 1,
+                        0 if row["indexed_paper_id"] is not None else 1,
+                        0 if row["status"] == "ready" else 1,
+                        row["created_at"],
+                        row["id"],
+                    ),
+                )
+                source_id = winner["id"]
+                for loser in sorted(rows, key=lambda row: row["id"]):
+                    if loser["id"] != source_id:
+                        self._merge_source_locked(connection, source_id, loser["id"])
+
+            for kind, value in identities:
+                existing = connection.execute(
+                    """
+                    SELECT source_id FROM source_identities
+                    WHERE identity_kind=? AND normalized_value=?
+                    """,
+                    (kind, value),
+                ).fetchone()
+                if existing is None:
+                    connection.execute(
+                        """
+                        INSERT INTO source_identities(
+                            id, source_id, identity_kind, normalized_value,
+                            is_primary, created_at
+                        ) VALUES (?, ?, ?, ?, 0, ?)
+                        """,
+                        (_new_id("identity"), source_id, kind, value, _now_iso()),
+                    )
+                elif existing["source_id"] != source_id:
+                    raise SourceIdentityConflictError(
+                        f"{kind}:{value} 已属于来源 {existing['source_id']}"
+                    )
+
+            for provider, provider_record_id, record_url, raw_json, retrieved_at in serialized_records:
+                existing = connection.execute(
+                    """
+                    SELECT id, source_id FROM source_records
+                    WHERE provider=? AND provider_record_id=?
+                    """,
+                    (provider, provider_record_id),
+                ).fetchone()
+                if existing and existing["source_id"] != source_id:
+                    raise SourceIdentityConflictError(
+                        f"{provider}:{provider_record_id} 已属于来源 {existing['source_id']}"
+                    )
+                now = _now_iso()
+                if existing:
+                    connection.execute(
+                        """
+                        UPDATE source_records SET record_url=?, raw_metadata=?,
+                            retrieved_at=?, updated_at=? WHERE id=?
+                        """,
+                        (record_url, raw_json, retrieved_at, now, existing["id"]),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO source_records(
+                            id, source_id, provider, provider_record_id, record_url,
+                            raw_metadata, retrieved_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            _new_id("record"),
+                            source_id,
+                            provider,
+                            provider_record_id,
+                            record_url,
+                            raw_json,
+                            retrieved_at,
+                            now,
+                            now,
+                        ),
+                    )
+
+            persisted_providers = {
+                row["provider"]
+                for row in connection.execute(
+                    "SELECT DISTINCT provider FROM source_records WHERE source_id=?",
+                    (source_id,),
+                ).fetchall()
+            }
+            metadata["providers"] = sorted(persisted_providers)
+            metadata_json = _json_dump(metadata)
+
+            all_identities = connection.execute(
+                """
+                SELECT identity_kind, normalized_value FROM source_identities
+                WHERE source_id=?
+                """,
+                (source_id,),
+            ).fetchall()
+            ordered_identities = sorted(
+                (
+                    (row["identity_kind"], row["normalized_value"])
+                    for row in all_identities
+                ),
+                key=lambda item: (
+                    {"doi": 0, "arxiv": 1, "url": 2, "content_sha256": 3}[
+                        item[0]
+                    ],
+                    item[1],
+                ),
+            )
+            if ordered_identities:
+                primary_kind, primary_value = ordered_identities[0]
+                final_key = f"{primary_kind}:{primary_value}"
+                connection.execute(
+                    "UPDATE source_identities SET is_primary=0 WHERE source_id=?",
+                    (source_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE source_identities SET is_primary=1
+                    WHERE source_id=? AND identity_kind=? AND normalized_value=?
+                    """,
+                    (source_id, primary_kind, primary_value),
+                )
+            else:
+                final_key = canonical_key
+
+            current = connection.execute(
+                "SELECT * FROM research_sources WHERE id=?", (source_id,)
+            ).fetchone()
+            if not created:
+                existing_metadata = json.loads(current["metadata"])
+                existing_metadata.update(metadata)
+                metadata_json = _json_dump(existing_metadata)
+                indexed_paper_id = current["indexed_paper_id"]
+                status = "ready" if current["status"] == "ready" else "discovered"
+                connection.execute(
+                    """
+                    UPDATE research_sources SET canonical_key=?, source_kind=?,
+                        title=?, authors=?, year=?, doi=?, arxiv_id=?,
+                        canonical_url=?, content_sha256=?, status=?, metadata=?,
+                        updated_at=?, version=version+1
+                    WHERE id=?
+                    """,
+                    (
+                        final_key,
+                        "paper"
+                        if source.source_kind == "paper"
+                        or current["source_kind"] == "paper"
+                        else "web",
+                        source.title or current["title"],
+                        authors_json if source.authors else current["authors"],
+                        source.year if source.year is not None else current["year"],
+                        dict(ordered_identities).get("doi") or current["doi"],
+                        dict(ordered_identities).get("arxiv") or current["arxiv_id"],
+                        dict(ordered_identities).get("url")
+                        or source.canonical_url
+                        or current["canonical_url"],
+                        dict(ordered_identities).get("content_sha256")
+                        or current["content_sha256"],
+                        status if indexed_paper_id is None else "ready",
+                        metadata_json,
+                        _now_iso(),
+                        source_id,
+                    ),
+                )
+            elif final_key != canonical_key:
+                connection.execute(
+                    """
+                    UPDATE research_sources SET canonical_key=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (final_key, _now_iso(), source_id),
+                )
+            row = connection.execute(
+                "SELECT * FROM research_sources WHERE id=?", (source_id,)
+            ).fetchone()
+        return self._source_from_row(row)
+
+    @staticmethod
+    def _merge_source_locked(
+        connection: sqlite3.Connection, winner_id: str, loser_id: str
+    ) -> None:
+        winner = connection.execute(
+            "SELECT * FROM research_sources WHERE id=?", (winner_id,)
+        ).fetchone()
+        loser = connection.execute(
+            "SELECT * FROM research_sources WHERE id=?", (loser_id,)
+        ).fetchone()
+        if winner is None or loser is None:
+            raise KeyError("待合并研究来源不存在")
+        memberships = connection.execute(
+            "SELECT * FROM project_sources WHERE source_id=?", (loser_id,)
+        ).fetchall()
+        for membership in memberships:
+            connection.execute(
+                """
+                INSERT INTO project_sources(
+                    project_id, source_id, position, note, added_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, source_id) DO UPDATE SET
+                    position=MIN(project_sources.position, excluded.position),
+                    note=CASE WHEN project_sources.note<>'' THEN project_sources.note
+                              ELSE excluded.note END
+                """,
+                (
+                    membership["project_id"],
+                    winner_id,
+                    membership["position"],
+                    membership["note"],
+                    membership["added_at"],
+                ),
+            )
+        connection.execute("DELETE FROM project_sources WHERE source_id=?", (loser_id,))
+        connection.execute(
+            "UPDATE research_artifacts SET source_id=? WHERE source_id=?",
+            (winner_id, loser_id),
+        )
+        connection.execute(
+            "UPDATE research_notes SET source_id=? WHERE source_id=?",
+            (winner_id, loser_id),
+        )
+        connection.execute(
+            "UPDATE source_records SET source_id=? WHERE source_id=?",
+            (winner_id, loser_id),
+        )
+        connection.execute(
+            "UPDATE source_identities SET is_primary=0 WHERE source_id IN (?, ?)",
+            (winner_id, loser_id),
+        )
+        connection.execute(
+            "UPDATE source_identities SET source_id=? WHERE source_id=?",
+            (winner_id, loser_id),
+        )
+        inherited_paper_id = (
+            winner["indexed_paper_id"]
+            if winner["indexed_paper_id"] is not None
+            else loser["indexed_paper_id"]
+        )
+        if loser["indexed_paper_id"] is not None:
+            connection.execute(
+                "UPDATE research_sources SET indexed_paper_id=NULL WHERE id=?",
+                (loser_id,),
+            )
+        connection.execute(
+            """
+            UPDATE research_sources SET
+                source_kind=CASE WHEN source_kind='paper' OR ?='paper'
+                                 THEN 'paper' ELSE 'web' END,
+                title=CASE WHEN title='' THEN ? ELSE title END,
+                authors=CASE WHEN authors='[]' THEN ? ELSE authors END,
+                year=COALESCE(year, ?),
+                indexed_paper_id=?,
+                status=CASE WHEN status='ready' OR ?='ready'
+                            THEN 'ready' ELSE status END,
+                locator=CASE WHEN locator='{}' THEN ? ELSE locator END,
+                snapshot_path=COALESCE(snapshot_path, ?),
+                snapshot_sha256=COALESCE(snapshot_sha256, ?),
+                extracted_text=COALESCE(extracted_text, ?),
+                fetched_at=COALESCE(fetched_at, ?)
+            WHERE id=?
+            """,
+            (
+                loser["source_kind"],
+                loser["title"],
+                loser["authors"],
+                loser["year"],
+                inherited_paper_id,
+                loser["status"],
+                loser["locator"],
+                loser["snapshot_path"],
+                loser["snapshot_sha256"],
+                loser["extracted_text"],
+                loser["fetched_at"],
+                winner_id,
+            ),
+        )
+        connection.execute("DELETE FROM research_sources WHERE id=?", (loser_id,))
+
     def get_source(self, source_id: str) -> Optional[ResearchSource]:
         with self._lock:
             row = self._conn.execute(

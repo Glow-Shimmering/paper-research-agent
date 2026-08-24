@@ -251,5 +251,6 @@ def test_research_ui_remote_access_is_fail_closed_but_static_asset_is_public(tmp
         assert client.get("/ui/projects").status_code == 200
         asset = client.get("/ui/static/htmx.min.js")
         assert asset.status_code == 200
-        assert "text/javascript" in asset.headers["content-type"]
+        media_type = asset.headers["content-type"].split(";", 1)[0]
+        assert media_type in {"text/javascript", "application/javascript"}
     store.close()

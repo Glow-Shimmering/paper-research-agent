@@ -651,7 +651,12 @@ def _fsync_tree(root: Path) -> None:
     for path in sorted(root.rglob("*")):
         if path.is_file():
             try:
-                descriptor = os.open(path, os.O_RDONLY)
+                # Windows 的 ``os.fsync`` 映射到 CRT ``_commit``，只读
+                # descriptor 会返回 EBADF；staging 文件由本次导入创建，可安全地
+                # 以读写方式打开而不修改内容。POSIX 继续使用最小的只读权限。
+                flags = os.O_RDWR if os.name == "nt" else os.O_RDONLY
+                flags |= getattr(os, "O_BINARY", 0)
+                descriptor = os.open(path, flags)
                 try:
                     os.fsync(descriptor)
                 finally:
@@ -665,6 +670,10 @@ def _fsync_tree(root: Path) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    # Python/Windows 不提供可移植的目录 fsync；文件数据已在落位前逐一同步，
+    # 而 Windows 的目录打开/``_commit`` 会以 EACCES 或 EBADF 失败。
+    if os.name == "nt":
+        return
     try:
         descriptor = os.open(path, os.O_RDONLY)
         try:

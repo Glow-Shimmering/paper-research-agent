@@ -104,6 +104,10 @@ def _gzip_deterministic(content: bytes) -> bytes:
 
 
 def _fsync_directory(path: Path) -> None:
+    # Windows 的 CRT 不支持目录 descriptor 上的 ``fsync``；snapshot 文件本身
+    # 已在原子替换前同步。POSIX 上继续同步目录项以获得崩溃一致性。
+    if os.name == "nt":
+        return
     try:
         descriptor = os.open(path, os.O_RDONLY)
     except OSError:

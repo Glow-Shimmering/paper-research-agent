@@ -1,4 +1,6 @@
 import gzip
+import os
+import stat
 
 import pytest
 
@@ -19,7 +21,10 @@ def test_content_addressed_snapshot_is_deterministic_idempotent_and_private(tmp_
     assert compressed_once == compressed_twice
     assert gzip.decompress(compressed_once) == html
     assert store.read(first.relative_path) == html
-    assert (store.root / first.relative_path).stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        # Windows 的 st_mode 不表达 NTFS ACL，不能用 POSIX mode bits 验证。
+        mode = stat.S_IMODE((store.root / first.relative_path).stat().st_mode)
+        assert mode == stat.S_IRUSR | stat.S_IWUSR
 
 
 def test_snapshot_rejects_traversal_oversize_corruption_and_hash_mismatch(tmp_path):

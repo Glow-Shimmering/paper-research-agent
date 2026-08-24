@@ -267,7 +267,7 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 ### Phase 4 — 持久后台任务与单篇精读
 
-- [ ] Step 13：实现 SQLite-backed bounded job queue、CAS claim、progress、cancel/interrupted/restart 与幂等重排。
+- [x] Step 13：实现 SQLite-backed bounded job queue、CAS claim、progress、cancel/interrupted/restart 与幂等重排。
 - [ ] Step 14：实现 DeepReadCard Pydantic schema、field-specific retrieval、map/reduce、一次 JSON repair、token/context/tool budgets。
 - [ ] Step 15：验证 evidence scope、原文 quote、source fingerprint；原子保存 artifact+revision+evidence links+真实模型 metadata。
 - [ ] Step 16：实现 Deep Read UI：生成进度、九个固定栏目、证据抽屉、单字段重生成、人工编辑和版本历史。

@@ -83,4 +83,4 @@ interrupted → queued | cancelled | failed
 
 Job 保存 payload/result、进度、attempt/max-attempt、priority/run-after、timeout、lease、取消时间和错误。`idempotency_key` 使用部分唯一索引；同一个 key 只有在任务语义参数一致时才返回已有记录，否则 fail closed。Claim 与状态更新同时检查 status 和 `version`，避免两个 worker 重复占有同一任务。
 
-Phase 4 的 worker/queue 会复用这些持久化合同，不在 HTTP 请求内执行长任务。
+后台 worker/queue 复用这些持久化合同，不在 HTTP 请求内执行长任务。Web 启动恢复在一个事务内把遗留 `running` 标记为 `interrupted`，把遗留 `cancel_requested` 终结为 `cancelled`，并且只重排 `idempotent=1 AND attempts < max_attempts` 的任务。固定 worker 使用 lease owner + row version 更新进度和终态；过期 lease 同样只允许幂等且仍有额度的任务重排。排队/中断任务的取消直接终结，运行中任务则在 handler 的下一阶段边界协作取消。

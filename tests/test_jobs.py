@@ -114,17 +114,11 @@ def test_job_cancel_interrupt_and_reopen(tmp_path):
     db_path = tmp_path / "recovery.db"
     jobs = JobRepository(db_path)
     cancel_job = jobs.enqueue("web_fetch", {"url": "https://example.org"})
-    cancel_requested = jobs.request_cancel(
+    cancelled = jobs.request_cancel(
         cancel_job.id, expected_version=cancel_job.version
     )
-    assert cancel_requested.status == "cancel_requested"
-    cancelled = jobs.transition(
-        cancel_job.id,
-        "cancelled",
-        expected_status="cancel_requested",
-        expected_version=cancel_requested.version,
-    )
     assert cancelled.status == "cancelled"
+    assert cancelled.finished_at is not None
 
     running_one = jobs.enqueue("deep_read", {"n": 1})
     running_two = jobs.enqueue("deep_read", {"n": 2})

@@ -17,6 +17,7 @@ from .answer import ask as answer_ask
 from .embeddings import Embedder
 from .indexer import index_library
 from .ingestion import FetchPolicy, SafeFetcher, SnapshotStore, WebIngestService
+from .jobs import JobQueue, WorkerPool
 from .llm import LLMClient, LLMError
 from .search import hybrid_search
 from .security import (
@@ -33,7 +34,7 @@ from .sources import (
     SemanticScholarAdapter,
 )
 from .sources.actions import SourceActionService
-from .storage import ResearchRepository
+from .storage import JobRepository, ResearchRepository
 from .store import Store
 from .web.routes import register_project_routes
 from .web.routes.discovery import register_discovery_routes
@@ -115,10 +116,15 @@ def create_app(
     snapshot_store=None,
     pdf_downloader=None,
     download_directory=None,
+    job_repository=None,
+    job_handlers=None,
+    job_worker_count: int | None = None,
 ) -> FastAPI:
     """create_app(...) 可注入索引与研究 repository 依赖用于测试。"""
     owned_store: Store | None = None
     owned_research_repository: ResearchRepository | None = None
+    owned_job_repository: JobRepository | None = None
+    owned_worker_pool: WorkerPool | None = None
     owned_embedder = None
     owned_llm = None
     owned_source_providers = None
@@ -131,9 +137,27 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        nonlocal owned_worker_pool
+        queue = _job_queue()
+        queue.recover_startup()
+        owned_worker_pool = WorkerPool(
+            queue,
+            job_handlers or {},
+            worker_count=(
+                config.JOB_WORKERS if job_worker_count is None else job_worker_count
+            ),
+            poll_interval=config.JOB_POLL_SECONDS,
+            lease_seconds=config.JOB_LEASE_SECONDS,
+        )
+        owned_worker_pool.start()
+        _app.state.job_queue = queue
+        _app.state.job_worker_pool = owned_worker_pool
         try:
             yield
         finally:
+            owned_worker_pool.stop(grace_seconds=10)
+            if owned_job_repository is not None:
+                owned_job_repository.close()
             if owned_research_repository is not None:
                 owned_research_repository.close()
             if owned_store is not None:
@@ -162,6 +186,18 @@ def create_app(
                     )
                 owned_research_repository = ResearchRepository(db_path)
             return owned_research_repository
+
+    def _job_queue() -> JobQueue:
+        nonlocal owned_job_repository
+        if job_repository is not None:
+            return JobQueue(job_repository)
+        with dependency_lock:
+            if owned_job_repository is None:
+                db_path = _store().db_path
+                if db_path is None:
+                    raise RuntimeError("内存 Store 必须显式注入 JobRepository")
+                owned_job_repository = JobRepository(db_path)
+            return JobQueue(owned_job_repository)
 
     def _embedder():
         nonlocal owned_embedder

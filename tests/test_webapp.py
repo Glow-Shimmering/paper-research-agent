@@ -61,6 +61,44 @@ def make_env(tmp_path, texts=None):
     return s
 
 
+def test_web_lifespan_recovers_idempotent_jobs_and_stops_bounded_worker(tmp_path):
+    from pragent.storage import JobRepository
+
+    s = make_env(tmp_path)
+    jobs = JobRepository(s.db_path)
+    queued = jobs.enqueue(
+        "recoverable",
+        {"value": 7},
+        idempotent=True,
+        idempotency_key="recoverable:7",
+        max_attempts=2,
+    )
+    claimed = jobs.claim_next("dead-worker")
+    assert claimed.id == queued.id
+    app = create_app(
+        store=s,
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(),
+        job_repository=jobs,
+        job_handlers={"recoverable": lambda _context, payload: payload},
+        job_worker_count=1,
+    )
+
+    with TestClient(app):
+        import time
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and jobs.get(queued.id).status != "succeeded":
+            time.sleep(0.01)
+        assert jobs.get(queued.id).status == "succeeded"
+        pool = app.state.job_worker_pool
+        assert pool.running
+
+    assert not pool.running
+    jobs.close()
+    s.close()
+
+
 def test_status(tmp_path):
     s = make_env(tmp_path)
     client = TestClient(create_app(store=s, embedder=FakeEmbedder(), llm=FakeLLM()))

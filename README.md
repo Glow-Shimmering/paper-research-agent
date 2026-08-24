@@ -52,6 +52,9 @@ pra serve
 | `PRA_WEB_FETCH_MAX_BYTES` | `10485760` | 普通网页原始 HTML byte 上限 |
 | `PRA_WEB_FETCH_TIMEOUT_SECONDS` | `20` | 网页抓取总超时秒数 |
 | `PRA_WEB_FETCH_MAX_REDIRECTS` | `5` | 网页抓取逐跳校验的最大重定向数 |
+| `PRA_JOB_WORKERS` | `2` | 持久后台任务固定 worker 数（1–16） |
+| `PRA_JOB_POLL_SECONDS` | `0.25` | worker 空闲轮询间隔 |
+| `PRA_JOB_LEASE_SECONDS` | `60` | worker claim/renew 的 lease 秒数 |
 | `PRA_EMBED_MODEL` | `BAAI/bge-small-zh-v1.5` | 嵌入模型（首次索引联网下载 ~100MB） |
 | `PRA_DATA_DIR` | `~/.pragent` | 独立数据目录；不会自动读取或修改旧 Pagent 数据 |
 | `PRA_DOWNLOAD_DIR` | （未设） | 对话下载目录；不设时使用显式配置的 `PRA_DATA_DIR`，否则用已索引论文库目录 |

@@ -31,7 +31,8 @@ flowchart LR
 - `store.py`：论文、分块、向量、稳定证据、Agent run 和事件日志的 SQLite 兼容门面。
 - `storage/migrations.py`：从 v1 开始的有序 schema migrations、迁移历史校验、磁盘库一致备份与事务回滚边界。
 - `storage/research_repository.py`：project/source/provenance/artifact revision/evidence link/note 的事务、分页与版本 CAS。
-- `storage/job_repository.py`：持久 job、幂等 enqueue、lease claim、progress/cancel/status CAS。
+- `storage/job_repository.py`：持久 job、幂等 enqueue、lease claim/renew/reap、progress/cancel/status CAS。
+- `jobs/queue.py` / `jobs/worker.py`：启动恢复、仅幂等重排、固定并发 worker、协作取消与 deadline 阶段边界。
 - `web/routes/projects.py`：`/api/v1` project JSON API 与 Jinja/HTMX project/question/source vertical slice。
 - `sources/base.py` / `sources/identity.py`：provider-neutral normalized source contract，以及 DOI → arXiv ID → canonical URL → content SHA 的确定性、可传递合并。
 - `sources/arxiv.py`：有界 arXiv Atom adapter；`websearch.py` 仅保留旧调用合同的兼容门面。
@@ -117,4 +118,4 @@ SQLite schema v5 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 - 37 个离线 JSON 场景用于回归状态机、预算和引用合同。
 - 场景使用脚本化模型与工具结果，不代表真实模型质量、提示注入抵抗能力或语义蕴含评测。
 
-Phase 3 的 provider 与网页测试全部使用 fixture/fake transport，不代表实时服务可用性。下一阶段将在此 source/document 底座上实现持久 worker 与证据验证的单篇精读卡。
+Phase 3 的 provider 与网页测试全部使用 fixture/fake transport，不代表实时服务可用性。Phase 4 的后台任务由 SQLite job 表驱动：Web 启动时先把遗留运行任务标为 interrupted，仅在仍有 attempt 额度时重排声明为 idempotent 的任务，再启动固定数量 worker；取消和 deadline 只在 handler 显式阶段边界生效，不伪装能够强杀正在运行的 SDK 请求。

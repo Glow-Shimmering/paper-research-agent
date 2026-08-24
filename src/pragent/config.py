@@ -16,6 +16,19 @@ def _env_or_default(name: str, default: str) -> str:
     return os.getenv(name) or default
 
 
+def _positive_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 必须是正数") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} 必须是正数")
+    return value
+
+
 def _positive_int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -75,6 +88,11 @@ SNAPSHOT_DIR = LIBRARY_DIR / "snapshots"
 WEB_FETCH_MAX_BYTES = _positive_int_env("PRA_WEB_FETCH_MAX_BYTES", 10 * 1024 * 1024)
 WEB_FETCH_TIMEOUT_SECONDS = _positive_int_env("PRA_WEB_FETCH_TIMEOUT_SECONDS", 20)
 WEB_FETCH_MAX_REDIRECTS = _positive_int_env("PRA_WEB_FETCH_MAX_REDIRECTS", 5)
+JOB_WORKERS = _positive_int_env("PRA_JOB_WORKERS", 2)
+if JOB_WORKERS > 16:
+    raise RuntimeError("PRA_JOB_WORKERS 不能超过 16")
+JOB_POLL_SECONDS = _positive_float_env("PRA_JOB_POLL_SECONDS", 0.25)
+JOB_LEASE_SECONDS = _positive_int_env("PRA_JOB_LEASE_SECONDS", 60)
 
 
 def download_dir_override() -> Optional[Path]:

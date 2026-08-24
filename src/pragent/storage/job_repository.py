@@ -254,6 +254,7 @@ class JobRepository(SQLiteRepository):
         result: Any = None,
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
+        lease_owner: Optional[str] = None,
     ) -> ResearchJob:
         _validate_status(to_status)
         _validate_status(expected_status)
@@ -273,6 +274,7 @@ class JobRepository(SQLiteRepository):
                                           THEN lease_expires_at ELSE NULL END,
                     finished_at=?, updated_at=?, version=version+1
                 WHERE id=? AND status=? AND version=?
+                  AND (? IS NULL OR lease_owner=?)
                 """,
                 (
                     to_status,
@@ -286,6 +288,8 @@ class JobRepository(SQLiteRepository):
                     job_id,
                     expected_status,
                     expected_version,
+                    lease_owner,
+                    lease_owner,
                 ),
             )
             if not cursor.rowcount:
@@ -305,6 +309,7 @@ class JobRepository(SQLiteRepository):
         total: Optional[int] = None,
         expected_version: int,
         expected_status: str = "running",
+        lease_owner: Optional[str] = None,
     ) -> ResearchJob:
         if not isinstance(current, int) or current < 0:
             raise ValueError("current 必须是非负整数")
@@ -317,6 +322,7 @@ class JobRepository(SQLiteRepository):
                 UPDATE research_jobs
                 SET progress_current=?, progress_total=?, updated_at=?, version=version+1
                 WHERE id=? AND status=? AND version=?
+                  AND (? IS NULL OR lease_owner=?)
                 """,
                 (
                     current,
@@ -325,6 +331,8 @@ class JobRepository(SQLiteRepository):
                     job_id,
                     expected_status,
                     expected_version,
+                    lease_owner,
+                    lease_owner,
                 ),
             )
             if not cursor.rowcount:
@@ -359,14 +367,32 @@ class JobRepository(SQLiteRepository):
                 raise JobStateConflictError(
                     f"Research Job {job_id} 当前状态不能请求取消：{row['status']}"
                 )
+            # 尚未运行或已经中断的任务没有 worker 会接手确认，直接进入终态；
+            # 仅 running 使用 cancel_requested，由持有 lease 的 worker 在阶段边界取消。
+            next_status = (
+                "cancel_requested" if row["status"] == "running" else "cancelled"
+            )
             cursor = connection.execute(
                 """
                 UPDATE research_jobs
-                SET status='cancel_requested', cancel_requested_at=?, updated_at=?,
-                    version=version+1
+                SET status=?, cancel_requested_at=?,
+                    finished_at=CASE WHEN ?='cancelled' THEN ? ELSE finished_at END,
+                    lease_owner=CASE WHEN ?='cancel_requested' THEN lease_owner ELSE NULL END,
+                    lease_expires_at=CASE WHEN ?='cancel_requested' THEN lease_expires_at ELSE NULL END,
+                    updated_at=?, version=version+1
                 WHERE id=? AND version=?
                 """,
-                (now, now, job_id, expected_version),
+                (
+                    next_status,
+                    now,
+                    next_status,
+                    now,
+                    next_status,
+                    next_status,
+                    now,
+                    job_id,
+                    expected_version,
+                ),
             )
             if not cursor.rowcount:
                 raise JobStateConflictError(f"Research Job {job_id} 取消 CAS 失败")
@@ -390,6 +416,133 @@ class JobRepository(SQLiteRepository):
                 (now,),
             )
         return int(cursor.rowcount)
+
+    def recover_startup(self) -> tuple[int, int, int]:
+        """恢复遗留任务，并且只重排仍有重试额度的幂等任务。
+
+        返回 ``(interrupted, requeued, left_interrupted)``。整个恢复过程位于
+        一个 ``BEGIN IMMEDIATE`` 事务，多个进程同时启动也不会重复重排。
+        """
+
+        now = _now_iso()
+        with self._transaction(immediate=True) as connection:
+            interrupted = int(
+                connection.execute(
+                    """
+                    UPDATE research_jobs
+                    SET status='interrupted', lease_owner=NULL, lease_expires_at=NULL,
+                        error_code='worker_interrupted',
+                        error_message='任务因服务重启而中断',
+                        updated_at=?, version=version+1
+                    WHERE status='running'
+                    """,
+                    (now,),
+                ).rowcount
+            )
+            # 已请求取消的任务在旧 worker 消失后不应再次执行。
+            connection.execute(
+                """
+                UPDATE research_jobs
+                SET status='cancelled', lease_owner=NULL, lease_expires_at=NULL,
+                    finished_at=?, updated_at=?, version=version+1
+                WHERE status='cancel_requested'
+                """,
+                (now, now),
+            )
+            requeued = int(
+                connection.execute(
+                    """
+                    UPDATE research_jobs
+                    SET status='queued', progress_current=0, progress_total=NULL,
+                        result=NULL, error_code=NULL, error_message=NULL,
+                        lease_owner=NULL, lease_expires_at=NULL, finished_at=NULL,
+                        run_after=NULL, updated_at=?, version=version+1
+                    WHERE status='interrupted' AND idempotent=1
+                      AND attempts < max_attempts
+                    """,
+                    (now,),
+                ).rowcount
+            )
+            left = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM research_jobs WHERE status='interrupted'"
+                ).fetchone()[0]
+            )
+        return interrupted, requeued, left
+
+    def renew_lease(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        expected_version: int,
+        lease_seconds: int = 300,
+        now: Optional[str] = None,
+    ) -> ResearchJob:
+        worker_id = _required_text(worker_id, "worker_id")
+        if not isinstance(lease_seconds, int) or lease_seconds <= 0:
+            raise ValueError("lease_seconds 必须是正整数")
+        now_dt = _parse_or_now(now)
+        lease_expires = (now_dt + timedelta(seconds=lease_seconds)).isoformat(
+            timespec="microseconds"
+        )
+        with self._transaction(immediate=True) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_jobs
+                SET lease_expires_at=?, updated_at=?, version=version+1
+                WHERE id=? AND status IN ('running', 'cancel_requested')
+                  AND lease_owner=? AND version=?
+                """,
+                (
+                    lease_expires,
+                    now_dt.isoformat(timespec="microseconds"),
+                    job_id,
+                    worker_id,
+                    expected_version,
+                ),
+            )
+            if not cursor.rowcount:
+                self._raise_job_conflict_locked(
+                    connection, job_id, "running", expected_version
+                )
+            row = connection.execute(
+                "SELECT * FROM research_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        return self._job_from_row(row)
+
+    def reap_expired_leases(self, *, now: Optional[str] = None) -> tuple[int, int]:
+        """中断过期 lease，并重排仍有额度的幂等任务。"""
+
+        now_value = _parse_or_now(now).isoformat(timespec="microseconds")
+        with self._transaction(immediate=True) as connection:
+            expired = int(
+                connection.execute(
+                    """
+                    UPDATE research_jobs
+                    SET status='interrupted', lease_owner=NULL, lease_expires_at=NULL,
+                        error_code='lease_expired', error_message='任务执行租约已过期',
+                        updated_at=?, version=version+1
+                    WHERE status='running' AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at<=?
+                    """,
+                    (now_value, now_value),
+                ).rowcount
+            )
+            requeued = int(
+                connection.execute(
+                    """
+                    UPDATE research_jobs
+                    SET status='queued', progress_current=0, progress_total=NULL,
+                        error_code=NULL, error_message=NULL, run_after=NULL,
+                        updated_at=?, version=version+1
+                    WHERE status='interrupted' AND idempotent=1
+                      AND attempts < max_attempts
+                    """,
+                    (now_value,),
+                ).rowcount
+            )
+        return expired, requeued
 
     @staticmethod
     def _same_enqueue_request(

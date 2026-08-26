@@ -18,7 +18,7 @@
 - CLI 与本地 Web 界面双入口（统一命令名 `pra`）
 - 索引过程只读：解析元数据建库浏览，不改动已有 PDF；下载工具会新增或原子替换同 arXiv 编号文件
 
-设计细节见 [架构说明](docs/architecture.md)、[产品工作流](docs/product-workflows.md)与[来源抓取安全](docs/source-security.md)。
+设计细节见 [架构说明](docs/architecture.md)、[产品工作流](docs/product-workflows.md)与[来源抓取安全](docs/source-security.md)。如果你准备接管而不是继续扩功能，请从[核心链路接管指南](docs/ownership/README.md)开始。
 
 ## 安装
 
@@ -63,7 +63,7 @@ pra serve
 
 配置文件查找顺序为：`PRA_ENV_FILE`、当前工作目录的 `.env`、editable 源码仓库根目录的 `.env`。显式指定但文件不存在时不会回退到其他 `.env`；非空系统环境变量始终优先。普通 wheel 安装后建议在运行目录放置 `.env`，或设置 `PRA_ENV_FILE`。
 
-> 首次 `pra index` 需联网下载嵌入模型（~100MB，缓存于本地）。国内网络直连 HuggingFace 常失败：在 `.env` 中设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_DISABLE_XET=1`（镜像不支持 Xet 存储，缺一不可）。
+> 首次 `pra index` 需联网下载嵌入模型（~100MB，缓存于本地）。国内网络直连 HuggingFace 常失败：在 `.env` 中设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_DISABLE_XET=1`（镜像不支持 Xet 存储，缺一不可）。项目显式安装 `httpx` 的 SOCKS extra，因此系统配置 `ALL_PROXY=socks5://...` 时不需要再手工补装 `socksio`。
 
 ## 用法
 
@@ -100,7 +100,7 @@ PDF 解析、网页正文抽取、分块、BM25 和向量嵌入均在本地执�
 
 模型可使用本地混合检索、单篇检索、分页概览、PDF 页面阅读、相邻分块阅读、固定/读取证据、论文列表、库状态、arXiv 搜索、下载、索引和笔记工具。读取本地资料可自动执行；联网或本地写入不会立即执行，必须先检查绑定了参数摘要与 SHA-256 的确认票据，再输入 `/confirm`。确认完成后 Agent 会沿原始 `tool_call_id` 自动续跑；`/cancel` 会记录取消结果并结束对应 run。Agent 不能切换论文库根目录；切换目录必须在终端显式运行 `pra index <目录> --force`。
 
-深读工具返回稳定的 `[E:ev_…]` 证据标记。Agent 的最终回答只能引用本轮真实返回的 evidence ID；索引中文件或分块发生变化后，已固定证据会标为 stale，而不是静默指向新内容。传统 `pra ask` 继续使用 `[n]` 引用，两条问答路径共享同一引用验证器。SQLite 使用有序 migration 升级到 schema v5；已有磁盘库升级前会生成一致备份，任一步失败则回滚整个 migration 事务并保留原论文与分块。
+深读工具返回稳定的 `[E:ev_…]` 证据标记。Agent 的最终回答只能引用本轮真实返回的 evidence ID；索引中文件或分块发生变化后，已固定证据会标为 stale，而不是静默指向新内容。传统 `pra ask` 继续使用 `[n]` 引用，两条问答路径共享同一引用验证器。SQLite 使用有序 migration 升级到 schema v6；已有磁盘库升级前会生成一致备份，任一步失败则回滚整个 migration 事务并保留原论文与分块。
 
 对话内支持 `/help`、`/clear`、`/copy`、`/export`、`/confirm`、`/cancel`、`/quit`。
 

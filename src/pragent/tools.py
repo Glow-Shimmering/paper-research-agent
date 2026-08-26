@@ -6,6 +6,7 @@
 import copy
 import json
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -21,6 +22,8 @@ from .tool_protocol import (
     validate_tool_arguments,
 )
 
+logger = logging.getLogger(__name__)
+
 _MAX_OUTLINE_PAGES = 100
 _MAX_OUTLINE_CHARS = 24_000
 _MAX_READ_PAGE_SPAN = 50
@@ -34,6 +37,7 @@ class ToolContext:
     store: Any
     embedder: Any
     llm: Any
+    session_id: Optional[str] = None
     require_confirmation: bool = True
     pending_action: Optional[PendingAction | tuple[str, dict]] = None
     last_confirmed_action: Optional[ConfirmedAction] = None
@@ -1086,13 +1090,28 @@ def _handler_result(value: Any) -> ToolResult:
     return ToolResult.success(message=str(value))
 
 
-def _run_handler(spec: ToolSpec, args: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
+def _run_handler(
+    spec: ToolSpec,
+    args: Mapping[str, Any],
+    ctx: ToolContext,
+    *,
+    run_id: Optional[str] = None,
+) -> ToolResult:
     try:
         return _handler_result(spec.handler(ctx, **dict(args)))
-    except Exception:
+    except Exception as exc:
+        logger.exception(
+            "tool handler failed",
+            extra={
+                "session_id": ctx.session_id,
+                "run_id": run_id,
+                "tool_name": spec.name,
+                "error_type": type(exc).__name__,
+            },
+        )
         return ToolResult.error(
             "tool_execution_failed",
-            f"工具 {name} 执行失败，请检查本地日志",
+            f"工具 {spec.name} 执行失败，请检查本地日志",
             retryable=spec.external,
         )
 
@@ -1169,7 +1188,12 @@ def execute_tool_result(
                 "待确认参数已发生变化，操作已取消。",
             )
         ctx.pending_action = None
-        result = _run_handler(entry, pending.args, ctx)
+        result = _run_handler(
+            entry,
+            pending.args,
+            ctx,
+            run_id=pending.run_id or run_id,
+        )
         ctx.last_confirmed_action = ConfirmedAction(
             name=pending.name,
             args=copy.deepcopy(pending.args),
@@ -1197,7 +1221,7 @@ def execute_tool_result(
             )
             ctx.pending_action = pending
         return _confirmation_result(pending, ctx)
-    return _run_handler(entry, normalized_args, ctx)
+    return _run_handler(entry, normalized_args, ctx, run_id=run_id)
 
 
 def execute_tool(name: str, args: dict, ctx: ToolContext, *, confirmed: bool = False) -> str:

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 
 import pytest
 
@@ -14,6 +15,7 @@ from pragent.tools import (
     execute_tool,
     execute_tool_result,
     register_tool,
+    unregister_tool,
 )
 
 from helpers import FakeEmbedder, make_paper
@@ -134,6 +136,50 @@ def test_web_search_failure(monkeypatch, tmp_path):
     assert result.ok is False and result.code == "web_search_failed"
     assert result.retryable is True
     assert "联网检索失败" in result.to_model_text()
+
+
+def test_unhandled_tool_exception_is_logged_and_sanitized(caplog, tmp_path):
+    def handler(ctx, secret=""):
+        raise RuntimeError(f"provider rejected {secret}")
+
+    register_tool(
+        ToolSpec(
+            name="failing_local_tool",
+            description="测试未处理异常",
+            parameters={
+                "type": "object",
+                "properties": {"secret": {"type": "string"}},
+                "required": ["secret"],
+            },
+            handler=handler,
+            effects=frozenset({ToolEffect.READ_LOCAL}),
+            timeout_seconds=5.0,
+            idempotent=True,
+        )
+    )
+    ctx = make_ctx(tmp_path)
+    ctx.session_id = "session-1"
+    try:
+        with caplog.at_level(logging.ERROR, logger="pragent.tools"):
+            result = execute_tool_result(
+                "failing_local_tool",
+                {"secret": "private-token"},
+                ctx,
+                run_id="run-1",
+            )
+    finally:
+        unregister_tool("failing_local_tool")
+
+    assert result.ok is False
+    assert result.code == "tool_execution_failed"
+    assert result.message == "工具 failing_local_tool 执行失败，请检查本地日志"
+    assert "private-token" not in result.to_model_text()
+    record = caplog.records[-1]
+    assert record.getMessage() == "tool handler failed"
+    assert record.session_id == "session-1"
+    assert record.run_id == "run-1"
+    assert record.tool_name == "failing_local_tool"
+    assert record.error_type == "RuntimeError"
 
 
 def test_web_search_requires_confirmation_before_external_request(monkeypatch, tmp_path):

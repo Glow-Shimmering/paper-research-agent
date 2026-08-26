@@ -41,7 +41,12 @@ class WebAgentSession:
     def __init__(self, session_id: str, store, embedder, llm):
         self.id = session_id
         self.messages: list[dict] = []
-        self.ctx = ToolContext(store=store, embedder=embedder, llm=llm)
+        self.ctx = ToolContext(
+            store=store,
+            embedder=embedder,
+            llm=llm,
+            session_id=session_id,
+        )
         self.lock = threading.Lock()
         self.last_active = time.time()
         self.run_id: Optional[str] = None

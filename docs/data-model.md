@@ -68,6 +68,8 @@ Project-level `comparison` artifact 同样使用专用原子保存入口。其 c
 
 比较 cell 的人工编辑不会原位更新 content，而是用 artifact version 做 CAS 后追加 `created_by=user` revision。保留证据时重新验证全部 evidence；显式设为 `insufficient_evidence` 时，该 cell 的 refs 与 links 必须同时为空。项目 fingerprint 变化后 artifact 为 stale，历史仍可读取但不能继续派生人工 revision。
 
+`review_outline` 是 project-level artifact。content 固定研究问题的 id/text/version 快照、2–20 个来源、绑定的 comparison artifact/revision，以及章节与 planned claims。专用保存事务要求问题快照仍当前、comparison 仍为当前未漂移 revision，并把每条 claim evidence 限制在该 comparison 已使用的同 source 精确 quote；因此仅属于项目但没有进入比较矩阵的 evidence 也不能旁路写入提纲。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

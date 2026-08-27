@@ -2050,6 +2050,285 @@ class ResearchRepository(SQLiteRepository):
             ).fetchone()
         return self._revision_from_row(row)
 
+    def append_validated_review_outline_revision(
+        self,
+        artifact_id: str,
+        content: Any,
+        *,
+        expected_artifact_version: int,
+        expected_project_fingerprint: str,
+        question_snapshots: Iterable[tuple[str, int, str]],
+        selected_source_ids: Iterable[str],
+        comparison_artifact_id: str,
+        comparison_revision_id: str,
+        evidence_refs: Iterable[tuple[str, str, int, str, str]],
+        created_by: str,
+        model: Optional[str],
+        usage: Any,
+        finish_reason: Optional[str],
+        prompt_version: str,
+        schema_version: int,
+        revision_id: Optional[str] = None,
+    ) -> ArtifactRevision:
+        """Atomically bind a review outline to questions, comparison and evidence."""
+
+        _validate_choice(created_by, {"model", "user"}, "created_by")
+        if not isinstance(expected_project_fingerprint, str) or not expected_project_fingerprint:
+            raise ArtifactValidationError("必须提供生成开始时的 project fingerprint")
+        if created_by == "model" and (not isinstance(model, str) or not model.strip()):
+            raise ArtifactValidationError("模型生成的 review outline 必须保存 model metadata")
+        if not isinstance(usage, dict):
+            raise ArtifactValidationError("Review outline revision 必须保存 usage metadata")
+        prompt_version = _required_text(prompt_version, "prompt_version")
+        if not isinstance(schema_version, int) or schema_version < 1:
+            raise ArtifactValidationError("schema_version 必须是正整数")
+        selected = tuple(str(item).strip() for item in selected_source_ids)
+        if not 2 <= len(selected) <= 20 or len(selected) != len(set(selected)):
+            raise ArtifactValidationError("Review outline 必须包含 2–20 个不重复来源")
+        questions = tuple(question_snapshots)
+        question_ids = [item[0] for item in questions]
+        if not 1 <= len(questions) <= 20 or len(question_ids) != len(set(question_ids)):
+            raise ArtifactValidationError("Review outline 研究问题范围无效")
+        refs = tuple(evidence_refs)
+        if not isinstance(content, dict):
+            raise ArtifactValidationError("Review outline content 格式无效")
+        if tuple(content.get("source_ids", ())) != selected:
+            raise ArtifactValidationError("Review outline content 与所选来源不一致")
+        if (
+            content.get("comparison_artifact_id") != comparison_artifact_id
+            or content.get("comparison_revision_id") != comparison_revision_id
+        ):
+            raise ArtifactValidationError("Review outline comparison provenance 不一致")
+        content_questions = content.get("research_questions")
+        expected_questions = [
+            {"id": item[0], "version": item[1], "question": item[2]}
+            for item in questions
+        ]
+        if content_questions != expected_questions:
+            raise ArtifactValidationError("Review outline question snapshots 不一致")
+        sections = content.get("sections")
+        if not isinstance(sections, list):
+            raise ArtifactValidationError("Review outline 缺少 sections")
+        content_refs: list[tuple[str, str, int, str, str]] = []
+        for section in sections:
+            if not isinstance(section, dict) or not section.get("key"):
+                raise ArtifactValidationError("Review outline section 格式无效")
+            claims = section.get("planned_claims")
+            if not isinstance(claims, list):
+                raise ArtifactValidationError("Review outline claims 格式无效")
+            for claim_index, claim in enumerate(claims):
+                if not isinstance(claim, dict):
+                    raise ArtifactValidationError("Review outline claim 格式无效")
+                field_path = (
+                    f"$.sections.{section['key']}.claims.{claim_index}"
+                )
+                claim_refs = claim.get("evidence_refs")
+                if not isinstance(claim_refs, list):
+                    raise ArtifactValidationError("Review outline evidence 格式无效")
+                for ordinal, ref in enumerate(claim_refs):
+                    if not isinstance(ref, dict):
+                        raise ArtifactValidationError("Review outline evidence 格式无效")
+                    content_refs.append(
+                        (
+                            str(ref.get("evidence_id") or ""),
+                            field_path,
+                            ordinal,
+                            str(ref.get("source_id") or ""),
+                            str(ref.get("quote") or ""),
+                        )
+                    )
+        if sorted(content_refs) != sorted(refs):
+            raise ArtifactValidationError("Review outline content 与 evidence links 不一致")
+        content_json = _json_dump(content)
+        usage_json = _json_dump(usage)
+        revision_id = revision_id or _new_id("revision")
+        now = _now_iso()
+
+        with self._transaction(immediate=True) as connection:
+            artifact = connection.execute(
+                "SELECT * FROM research_artifacts WHERE id=?", (artifact_id,)
+            ).fetchone()
+            if artifact is None:
+                raise KeyError(f"研究 artifact 不存在：{artifact_id}")
+            if artifact["artifact_type"] != "review_outline" or artifact["source_id"] is not None:
+                raise ArtifactValidationError("Review outline 必须是 project-level artifact")
+            if int(artifact["version"]) != expected_artifact_version:
+                raise RecordVersionConflictError(
+                    f"研究 artifact {artifact_id} 版本冲突"
+                )
+            current_fingerprint = self._current_fingerprint_locked(connection, artifact)
+            if current_fingerprint != expected_project_fingerprint:
+                raise ArtifactValidationError("项目来源集合或内容已变化，请重新生成综述提纲")
+
+            for question_id, version, question_text in questions:
+                row = connection.execute(
+                    "SELECT * FROM research_questions WHERE id=? AND project_id=?",
+                    (question_id, artifact["project_id"]),
+                ).fetchone()
+                if (
+                    row is None
+                    or int(row["version"]) != version
+                    or row["question"] != question_text
+                ):
+                    raise ArtifactValidationError("研究问题已变化，请重新生成综述提纲")
+
+            comparison = connection.execute(
+                "SELECT * FROM research_artifacts WHERE id=?",
+                (comparison_artifact_id,),
+            ).fetchone()
+            comparison_revision = connection.execute(
+                "SELECT * FROM artifact_revisions WHERE id=?",
+                (comparison_revision_id,),
+            ).fetchone()
+            if (
+                comparison is None
+                or comparison["project_id"] != artifact["project_id"]
+                or comparison["artifact_type"] != "comparison"
+                or comparison["source_id"] is not None
+                or comparison["status"] != "ready"
+                or comparison_revision is None
+                or comparison_revision["artifact_id"] != comparison_artifact_id
+                or int(comparison_revision["revision_number"])
+                != int(comparison["current_revision_number"])
+                or comparison_revision["source_fingerprint"] != current_fingerprint
+            ):
+                raise ArtifactValidationError("比较矩阵已变化或不属于当前项目")
+            comparison_content = json.loads(comparison_revision["content"])
+            if tuple(comparison_content.get("source_ids", ())) != selected:
+                raise ArtifactValidationError("综述来源与比较矩阵来源不一致")
+            allowed_comparison_refs: set[tuple[str, str, str]] = set()
+            for cell in comparison_content.get("cells", []):
+                if not isinstance(cell, dict):
+                    raise ArtifactValidationError("比较矩阵 content 格式无效")
+                comparison_source_id = str(cell.get("source_id") or "")
+                for ref in cell.get("evidence_refs", []):
+                    if not isinstance(ref, dict):
+                        raise ArtifactValidationError("比较矩阵 evidence 格式无效")
+                    allowed_comparison_refs.add(
+                        (
+                            comparison_source_id,
+                            str(ref.get("evidence_id") or ""),
+                            str(ref.get("quote") or ""),
+                        )
+                    )
+
+            placeholders = ",".join("?" for _ in selected)
+            source_rows = connection.execute(
+                f"""
+                SELECT rs.id, rs.indexed_paper_id
+                FROM project_sources ps
+                JOIN research_sources rs ON rs.id=ps.source_id
+                WHERE ps.project_id=? AND rs.id IN ({placeholders})
+                """,
+                (artifact["project_id"], *selected),
+            ).fetchall()
+            source_papers = {
+                row["id"]: row["indexed_paper_id"] for row in source_rows
+            }
+            if set(source_papers) != set(selected):
+                raise ArtifactValidationError("Review outline 来源不属于当前项目")
+            if any(paper_id is None for paper_id in source_papers.values()):
+                raise ArtifactValidationError("Review outline 来源尚未完成全文索引")
+
+            seen: set[tuple[str, str]] = set()
+            validated_links: list[tuple[str, str, int]] = []
+            for evidence_id, field_path, ordinal, source_id, quote in refs:
+                if source_id not in source_papers:
+                    raise ArtifactValidationError("Review outline evidence 来源越界")
+                if (source_id, evidence_id, quote) not in allowed_comparison_refs:
+                    raise ArtifactValidationError(
+                        "Review outline evidence 不在绑定的比较矩阵中"
+                    )
+                if not isinstance(ordinal, int) or ordinal < 0:
+                    raise ArtifactValidationError("Review outline evidence ordinal 无效")
+                key = (field_path, evidence_id)
+                if key in seen:
+                    raise ArtifactValidationError("同一 review claim 不能重复引用 evidence")
+                seen.add(key)
+                evidence = connection.execute(
+                    "SELECT * FROM evidence WHERE id=?", (evidence_id,)
+                ).fetchone()
+                if evidence is None or int(evidence["paper_id"] or -1) != int(
+                    source_papers[source_id]
+                ):
+                    raise ArtifactValidationError("Review outline evidence 不属于声明来源")
+                paper_id = int(source_papers[source_id])
+                paper = connection.execute(
+                    "SELECT * FROM papers WHERE id=?", (paper_id,)
+                ).fetchone()
+                chunk = connection.execute(
+                    "SELECT * FROM chunks WHERE paper_id=? AND seq=?",
+                    (paper_id, evidence["chunk_seq"]),
+                ).fetchone()
+                if (
+                    paper is None
+                    or chunk is None
+                    or paper["sha256"] != evidence["paper_sha256"]
+                    or int(chunk["page"]) != int(evidence["page"])
+                    or hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest()
+                    != evidence["chunk_text_sha256"]
+                ):
+                    raise ArtifactValidationError("Review outline evidence 已过期")
+                if not isinstance(quote, str) or not quote or quote not in evidence["text"]:
+                    raise ArtifactValidationError("Review outline quote 不是 evidence 原文子串")
+                validated_links.append((evidence_id, field_path, ordinal))
+
+            revision_number = int(artifact["current_revision_number"]) + 1
+            parent = connection.execute(
+                """
+                SELECT id FROM artifact_revisions
+                WHERE artifact_id=? AND revision_number=?
+                """,
+                (artifact_id, revision_number - 1),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO artifact_revisions(
+                    id, artifact_id, revision_number, parent_revision_id, content,
+                    created_by, source_fingerprint, model, usage, finish_reason,
+                    prompt_version, schema_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    artifact_id,
+                    revision_number,
+                    parent["id"] if parent else None,
+                    content_json,
+                    created_by,
+                    current_fingerprint,
+                    model.strip() if isinstance(model, str) and model.strip() else None,
+                    usage_json,
+                    finish_reason,
+                    prompt_version,
+                    schema_version,
+                    now,
+                ),
+            )
+            for evidence_id, field_path, ordinal in validated_links:
+                connection.execute(
+                    """
+                    INSERT INTO artifact_evidence(
+                        artifact_revision_id, evidence_id, field_path, ordinal, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (revision_id, evidence_id, field_path, ordinal, now),
+                )
+            cursor = connection.execute(
+                """
+                UPDATE research_artifacts
+                SET current_revision_number=?, status='ready', updated_at=?, version=version+1
+                WHERE id=? AND version=?
+                """,
+                (revision_number, now, artifact_id, expected_artifact_version),
+            )
+            if not cursor.rowcount:
+                raise RecordVersionConflictError(f"研究 artifact {artifact_id} 版本冲突")
+            row = connection.execute(
+                "SELECT * FROM artifact_revisions WHERE id=?", (revision_id,)
+            ).fetchone()
+        return self._revision_from_row(row)
+
     def get_artifact_revision(self, revision_id: str) -> Optional[ArtifactRevision]:
         with self._lock:
             row = self._conn.execute(

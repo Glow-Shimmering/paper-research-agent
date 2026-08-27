@@ -25,6 +25,8 @@ from .research import (
     ComparisonWorkflow,
     DeepReadArtifactService,
     DeepReadWorkflow,
+    ReviewOutlineArtifactService,
+    ReviewOutlineWorkflow,
 )
 from .search import hybrid_search
 from .security import (
@@ -280,10 +282,33 @@ def create_app(
                 "revision_id": saved.revision.id,
             }
 
+        def review_outline_handler(context, payload):
+            context.report_progress(0, 1)
+            workflow = ReviewOutlineWorkflow(
+                _research_repository(),
+                _llm(),
+            )
+            saved = ReviewOutlineArtifactService(
+                _research_repository()
+            ).generate_and_save(
+                str(payload["project_id"]),
+                [str(item) for item in payload["question_ids"]],
+                [str(item) for item in payload["source_ids"]],
+                str(payload["comparison_artifact_id"]),
+                workflow,
+                title=str(payload.get("title") or "文献综述提纲"),
+            )
+            context.report_progress(1, 1)
+            return {
+                "artifact_id": saved.artifact.id,
+                "revision_id": saved.revision.id,
+            }
+
         return {
             "comparison": comparison_handler,
             "deep_read": deep_read_handler,
             "deep_read_field": deep_read_field_handler,
+            "review_outline": review_outline_handler,
         }
 
     def _embedder():

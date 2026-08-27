@@ -298,7 +298,11 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
   - 前置任务：缺失或 stale 的精读卡先按来源幂等排队，未满足前置条件时不创建 comparison；比较 job key 纳入项目 fingerprint 与所选精读 revision。
   - 编辑：artifact version CAS 后追加 `created_by=user` revision；保留证据时原子复验全部引用，显式 `insufficient_evidence` 时同时清空该 cell refs/links；stale artifact 禁止继续编辑且历史仍可读。
   - 验证：`tests/test_compare.py` 12 个合同测试；Windows 完整回归 `357 passed, 1 skipped`，临时目录 80 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check 全部通过。
-- [ ] Step 19：实现 review outline workflow，基于研究问题、选择来源和比较结果规划章节。
+- [x] Step 19：实现 review outline workflow，基于研究问题、选择来源和比较结果规划章节。
+  - 合同：冻结 1–20 个研究问题 id/text/version、与当前比较矩阵完全一致的 2–20 个来源及 comparison artifact/revision；LLM 只生成标题、章节与 planned claims。
+  - 证据：有证据 claim 的每个声明来源都必须复用绑定 comparison 中同来源的 evidence/逐字 quote；不足证据显式为空 refs；全流程有 call/context/token 预算且最多一次 repair。
+  - 保存：专用事务复验问题快照、project fingerprint、comparison 当前性、来源 membership/index 和 comparison-scoped evidence/quote；已接入持久 `review_outline` worker。
+  - 验证：`tests/test_review.py` 6 个合同测试；Windows 完整回归 `363 passed, 1 skipped`，临时目录 83 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check 全部通过。
 - [ ] Step 20：实现 section draft workflow 与编辑/version；claim 使用结构化 source/evidence tokens，生成后做 citation scope/freshness 校验。
 - [ ] Step 21：实现 Review UI：提纲调整、逐节生成/重试、证据检查、整稿预览；不允许模型静默添加项目外论文。
 

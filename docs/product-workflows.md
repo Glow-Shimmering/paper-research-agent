@@ -1,6 +1,6 @@
 # PRAgent 产品工作流
 
-本文记录当前已实现的 Phase 2–4 Web 工作流和 Step 17–18 比较工作流；综述与导出仍属于后续 Step，不在这里提前宣称可用。
+本文记录当前已实现的 Phase 2–4 Web 工作流、Step 17–18 比较工作流和 Step 19 综述提纲后端；综述 UI、章节草稿与导出仍属于后续 Step，不在这里提前宣称可用。
 
 ## 1. 创建研究项目
 
@@ -67,7 +67,15 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 
 保存每个 revision 时在一个事务内重新检查 project fingerprint、来源 membership、索引关联、evidence 新鲜度、evidence 所属来源、quote 原文子串，以及 JSON content 与 evidence links 完整一致。
 
-## 7. JSON API
+## 7. 证据约束的综述提纲
+
+`review_outline` workflow 接受当前项目的 1–20 个研究问题、与比较矩阵顺序完全一致的 2–20 个来源，以及一个 ready、未 stale 的当前 comparison artifact。LLM 只生成提纲标题、章节和 planned claims；研究问题快照、来源列表、comparison artifact/revision provenance 由系统写入，模型不能修改。
+
+每个有证据的 planned claim 必须为其声明的每个 source 提供该 source 在绑定 comparison revision 中已有的 evidence ID 和逐字 quote；无法支持的计划必须显式 `insufficient_evidence=true` 且不带 refs。输出使用严格 Pydantic schema、上下文/token/call 预算和全流程最多一次 JSON repair。
+
+保存使用专用原子入口：同一事务重新验证研究问题文本/version、完整 project fingerprint、comparison 当前 revision、所选来源 membership/index，以及 evidence 确实出现在绑定的 comparison、属于声明来源、chunk/hash 当前且 quote 为原文子串。提纲已注册为持久 `review_outline` worker job；创建与调整 UI 属于 Step 21。
+
+## 8. JSON API
 
 新能力位于 `/api/v1`：
 

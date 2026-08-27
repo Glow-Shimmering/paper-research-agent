@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}跨论文比较 · {{ project.title }}{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}">← 返回项目</a></p>
+<section class="hero"><div><p class="eyebrow">Comparison matrix</p><h1>跨论文比较</h1><p>选择 2–20 篇项目来源。系统先确保每篇都有当前精读卡，再生成可追溯矩阵。</p></div></section>
+<section class="panel">
+  <div class="section-heading"><h2>新建比较</h2><span>默认复用九栏精读证据</span></div>
+  <form class="stack-form" method="post" hx-post="/ui/projects/{{ project.id }}/comparisons" hx-target="#comparison-action" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>标题<input name="title" maxlength="200" value="跨论文比较矩阵" required></label>
+    <fieldset class="comparison-source-picker"><legend>选择来源</legend>
+    {% for membership in sources %}
+      <label class="check"><input type="checkbox" name="source_ids" value="{{ membership.source.id }}" {% if not membership.source.indexed_paper_id %}disabled{% endif %}>{{ membership.source.title or "未命名来源" }}{% if not membership.source.indexed_paper_id %}（未索引）{% endif %}</label>
+    {% else %}<p class="empty">项目中还没有来源。</p>{% endfor %}
+    </fieldset>
+    <label>自定义维度（可选，每行 <code>key|标签|说明</code>）<textarea name="custom_dimensions" rows="4" placeholder="deployment_cost|部署成本|只比较论文明确报告的资源成本"></textarea></label>
+    <button type="submit">生成比较矩阵</button>
+  </form>
+  <div id="comparison-action" aria-live="polite"></div>
+</section>
+<section class="panel">
+  <div class="section-heading"><h2>已有比较</h2><span>{{ comparisons|length }} 项</span></div>
+  <div class="history-list">
+  {% for item in comparisons %}
+    <a href="/ui/projects/{{ project.id }}/comparisons/{{ item.id }}">{{ item.title }} · revision {{ item.current_revision_number }}{% if item.stale %} · 已过期{% endif %}</a>
+  {% else %}<p class="empty">尚无比较矩阵</p>{% endfor %}
+  </div>
+</section>
+{% endblock %}

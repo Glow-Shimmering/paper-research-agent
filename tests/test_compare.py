@@ -17,7 +17,12 @@ from pragent.research import (
     ComparisonWorkflow,
     DeepReadCard,
 )
-from pragent.storage import ArtifactValidationError, JobRepository, ResearchRepository
+from pragent.storage import (
+    ArtifactValidationError,
+    JobRepository,
+    RecordVersionConflictError,
+    ResearchRepository,
+)
 from pragent.store import Store
 from pragent.webapp import create_app
 
@@ -266,6 +271,69 @@ def test_comparison_artifact_atomically_saves_project_evidence_and_metadata(tmp_
     store.close()
 
 
+def test_comparison_cell_edit_appends_user_revision_and_preserves_evidence(tmp_path):
+    store, repository, project, source_ids, _, _ = _seed_project(tmp_path)
+    saved = ComparisonArtifactService(repository).generate_and_save(
+        project.id,
+        source_ids,
+        ComparisonWorkflow(repository),
+    )
+
+    edited = ComparisonArtifactService(repository).edit_cell(
+        project.id,
+        saved.artifact.id,
+        source_ids[0],
+        "limitations",
+        "人工修订的局限性",
+        expected_artifact_version=saved.artifact.version,
+    )
+
+    matrix = ComparisonMatrix.model_validate(edited.revision.content)
+    target = next(
+        cell
+        for cell in matrix.cells
+        if cell.source_id == source_ids[0]
+        and cell.dimension_key == "limitations"
+    )
+    assert edited.revision.revision_number == 2
+    assert edited.revision.created_by == "user"
+    assert target.summary == "人工修订的局限性"
+    assert target.evidence_refs
+    assert len(repository.list_artifact_evidence(edited.revision.id)) == 18
+    insufficient = ComparisonArtifactService(repository).edit_cell(
+        project.id,
+        edited.artifact.id,
+        source_ids[0],
+        "limitations",
+        "论文未提供足够证据",
+        expected_artifact_version=edited.artifact.version,
+        insufficient_evidence=True,
+    )
+    insufficient_matrix = ComparisonMatrix.model_validate(
+        insufficient.revision.content
+    )
+    insufficient_cell = next(
+        cell
+        for cell in insufficient_matrix.cells
+        if cell.source_id == source_ids[0]
+        and cell.dimension_key == "limitations"
+    )
+    assert insufficient_cell.insufficient_evidence is True
+    assert insufficient_cell.evidence_refs == []
+    assert len(repository.list_artifact_evidence(insufficient.revision.id)) == 17
+    with pytest.raises(RecordVersionConflictError, match="版本冲突"):
+        ComparisonArtifactService(repository).edit_cell(
+            project.id,
+            saved.artifact.id,
+            source_ids[0],
+            "limitations",
+            "过期编辑",
+            expected_artifact_version=saved.artifact.version,
+        )
+    repository.close()
+    store.close()
+
+
 def test_comparison_revision_rejects_cross_source_evidence_atomically(tmp_path):
     store, repository, project, source_ids, evidence_ids, _ = _seed_project(tmp_path)
     draft = ComparisonWorkflow(repository).generate(project.id, source_ids)
@@ -350,6 +418,147 @@ def test_comparison_runs_through_persistent_worker_handler(tmp_path):
     assert current.status == "succeeded"
     artifact = repository.get_artifact(current.result["artifact_id"])
     assert artifact is not None and artifact.status == "ready"
+    jobs.close()
+    repository.close()
+    store.close()
+
+
+def test_comparison_api_ui_edit_evidence_and_revision_history(tmp_path):
+    store, repository, project, source_ids, _, _ = _seed_project(tmp_path)
+    jobs = JobRepository(store.db_path)
+    app = create_app(
+        store=store,
+        research_repository=repository,
+        job_repository=jobs,
+        llm=ScriptedComparisonLLM(),
+        job_worker_count=1,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        created = client.post(
+            f"/api/v1/projects/{project.id}/comparisons",
+            json={"source_ids": source_ids, "title": "Web 比较"},
+        )
+        assert created.status_code == 202
+        assert created.json()["status"] == "queued"
+        job_id = created.json()["job"]["id"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = client.get(
+                f"/api/v1/projects/{project.id}/jobs/{job_id}"
+            ).json()
+            if job["terminal"]:
+                break
+            time.sleep(0.02)
+        assert job["status"] == "succeeded"
+        artifact_id = jobs.get(job_id).result["artifact_id"]
+
+        detail = client.get(
+            f"/api/v1/projects/{project.id}/comparisons/{artifact_id}"
+        )
+        assert detail.status_code == 200
+        payload = detail.json()
+        assert len(payload["rows"]) == 2
+        assert len(payload["rows"][0]["cells"]) == 9
+        version = payload["artifact"]["version"]
+        edited = client.patch(
+            f"/api/v1/projects/{project.id}/comparisons/{artifact_id}/cells/{source_ids[0]}/limitations",
+            json={
+                "expected_artifact_version": version,
+                "summary": "Web 人工修订",
+            },
+        )
+        assert edited.status_code == 200
+        target = next(
+            cell
+            for row in edited.json()["rows"]
+            for cell in row["cells"]
+            if cell["source_id"] == source_ids[0]
+            and cell["dimension_key"] == "limitations"
+        )
+        assert target["summary"] == "Web 人工修订"
+        stale_edit = client.patch(
+            f"/api/v1/projects/{project.id}/comparisons/{artifact_id}/cells/{source_ids[0]}/limitations",
+            json={
+                "expected_artifact_version": version,
+                "summary": "冲突",
+            },
+        )
+        assert stale_edit.status_code == 409
+
+        revision_id = edited.json()["revision_public"]["id"]
+        evidence = client.get(
+            f"/api/v1/projects/{project.id}/comparisons/{artifact_id}/revisions/{revision_id}/cells/{source_ids[0]}/limitations/evidence"
+        )
+        assert evidence.status_code == 200
+        assert evidence.json()["items"][0]["quote"] == QUOTE
+        history = client.get(
+            f"/api/v1/projects/{project.id}/comparisons/{artifact_id}/revisions"
+        ).json()["items"]
+        assert [item["revision_number"] for item in history] == [2, 1]
+        page = client.get(
+            f"/ui/projects/{project.id}/comparisons/{artifact_id}"
+        )
+        assert page.status_code == 200
+        assert "跨论文比较" in page.text
+        assert "Web 人工修订" in page.text
+        assert "版本历史" in page.text
+        csrf_token = client.cookies.get("pra_csrf")
+        ui_edited = client.post(
+            f"/ui/projects/{project.id}/comparisons/{artifact_id}/cells/{source_ids[1]}/core_method/edit",
+            data={
+                "csrf_token": csrf_token,
+                "expected_artifact_version": edited.json()["artifact"]["version"],
+                "summary": "第二次连续编辑",
+            },
+        )
+        assert ui_edited.status_code == 200
+        assert ui_edited.text.count('id="comparison-state"') == 1
+        assert "revision 3" in ui_edited.text
+        assert "第二次连续编辑" in ui_edited.text
+        assert 'name="expected_artifact_version" value="4"' in ui_edited.text
+
+    jobs.close()
+    repository.close()
+    store.close()
+
+
+def test_comparison_api_queues_missing_deep_read_before_comparison(tmp_path):
+    store, repository, project, source_ids, _, _ = _seed_project(tmp_path)
+    third_paper = store.upsert_paper(
+        make_paper("third-web.pdf", title="Third Web", sha256="e" * 64)
+    )
+    store.replace_chunks(
+        third_paper,
+        [Chunk(None, third_paper, 0, 1, QUOTE, None)],
+    )
+    third_source = repository.ensure_source_for_paper(third_paper)
+    repository.add_project_source(project.id, third_source.id)
+    jobs = JobRepository(store.db_path)
+    app = create_app(
+        store=store,
+        research_repository=repository,
+        job_repository=jobs,
+        llm=ScriptedComparisonLLM(),
+        job_worker_count=1,
+    )
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        f"/api/v1/projects/{project.id}/comparisons",
+        json={"source_ids": [source_ids[0], third_source.id]},
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] == "prerequisites_queued"
+    assert payload["missing_source_ids"] == [third_source.id]
+    assert payload["stale_source_ids"] == []
+    assert len(payload["jobs"]) == 1
+    assert repository.list_artifacts(
+        project.id, artifact_type="comparison"
+    ).total == 0
+    client.close()
     jobs.close()
     repository.close()
     store.close()

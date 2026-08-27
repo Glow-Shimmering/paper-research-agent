@@ -1,6 +1,6 @@
 # PRAgent 产品工作流
 
-本文记录当前已实现的 Phase 2–4 Web 工作流和 Step 17 比较后端；比较 UI、综述与导出仍属于后续 Step，不在这里提前宣称可用。
+本文记录当前已实现的 Phase 2–4 Web 工作流和 Step 17–18 比较工作流；综述与导出仍属于后续 Step，不在这里提前宣称可用。
 
 ## 1. 创建研究项目
 
@@ -55,13 +55,17 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 
 模型输出在保存前验证 Pydantic schema、evidence 来源范围、当前 freshness 和 quote 精确子串；全流程最多进行一次 JSON repair。模型名、usage、finish reason、prompt/schema version 随 revision 保存。
 
-## 6. Project-scoped 比较后端
+## 6. Project-scoped 比较矩阵
 
 比较工作流只接受当前 project 明确选择的 2–20 个不重复来源。每个来源必须具有 `ready` 且未 stale 的当前精读卡；缺失与过期来源分别返回稳定列表，供下一步 UI 先排队补齐，而不是让 Agent 从整库自行挑选论文。
 
 默认九个比较维度直接复用精读卡字段，不再次调用模型。自定义维度按“一个维度覆盖全部所选来源”执行有界 LLM 调用；输出必须为完整 source × dimension 矩阵，并且只能使用对应来源精读卡已有的 evidence ID 和逐字 quote。全流程最多一次 JSON repair。
 
-比较生成已注册为 SQLite-backed `comparison` worker job。保存 revision 时在一个事务内重新检查 project fingerprint、来源 membership、索引关联、evidence 新鲜度、evidence 所属来源、quote 原文子串，以及 JSON content 与 evidence links 完整一致。当前仅完成后端 schema/workflow/artifact/job handler；创建、查看、编辑和版本 UI/API 属于 Step 18。
+比较生成已注册为 SQLite-backed `comparison` worker job。Web/API 创建入口会先检查精读卡；缺失或 stale 时只排队补齐对应精读任务，全部 ready 后再次提交才创建比较 job。默认维度不调用 LLM，自定义维度仍使用 worker 中配置的可审计 LLM。
+
+`/api/v1/projects/{project_id}/comparisons` 和 `/ui/projects/{project_id}/comparisons` 提供 project-scoped 创建与列表；详情按来源为行、维度为列展示完整矩阵，并可逐 cell 展开 evidence。每次人工编辑都要求 artifact version CAS，追加 `created_by=user` revision 而不覆盖历史；编辑可保留原证据，或显式切换为 `insufficient_evidence` 并原子移除该 cell 的 evidence links。来源变化后矩阵标记 stale，禁止继续编辑，但历史 revision 与 evidence 仍可读取。
+
+保存每个 revision 时在一个事务内重新检查 project fingerprint、来源 membership、索引关联、evidence 新鲜度、evidence 所属来源、quote 原文子串，以及 JSON content 与 evidence links 完整一致。
 
 ## 7. JSON API
 

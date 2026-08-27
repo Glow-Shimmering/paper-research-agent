@@ -1,0 +1,9 @@
+{% if status == "prerequisites_queued" %}
+<div class="action-message">已排队补齐 {{ jobs|length }} 篇精读卡。任务完成后请再次提交比较。</div>
+{% elif job %}
+<div class="action-message {% if job.status == 'succeeded' %}success{% elif job.terminal %}failure{% endif %}" {% if not job.terminal %}hx-get="/ui/projects/{{ project_id }}/comparisons/jobs/{{ job.id }}" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  {% if job.status == "succeeded" and artifact_id %}比较矩阵已生成。<a href="/ui/projects/{{ project_id }}/comparisons/{{ artifact_id }}">打开结果</a>
+  {% elif job.terminal %}比较任务未完成：{{ job.error.message if job.error else job.status }}
+  {% else %}比较任务 {{ job.status }}（{{ job.progress_current }}/{{ job.progress_total }}）{% endif %}
+</div>
+{% endif %}

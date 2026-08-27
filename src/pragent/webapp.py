@@ -43,7 +43,11 @@ from .sources import (
 from .sources.actions import SourceActionService
 from .storage import JobRepository, ResearchRepository
 from .store import Store
-from .web.routes import register_artifact_routes, register_project_routes
+from .web.routes import (
+    register_artifact_routes,
+    register_comparison_routes,
+    register_project_routes,
+)
 from .web.routes.discovery import register_discovery_routes
 from .websearch import WebSearchError, search_papers
 
@@ -633,6 +637,13 @@ def create_app(
         templates_directory=_web_resource_directory("templates"),
     )
     register_artifact_routes(
+        app,
+        repository_factory=_research_repository,
+        job_queue_factory=_job_queue,
+        store_factory=_store,
+        templates_directory=_web_resource_directory("templates"),
+    )
+    register_comparison_routes(
         app,
         repository_factory=_research_repository,
         job_queue_factory=_job_queue,

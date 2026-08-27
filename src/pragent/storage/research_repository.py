@@ -1570,6 +1570,18 @@ class ResearchRepository(SQLiteRepository):
             ).fetchall()
         return Page(total, tuple(self._artifact_from_row(row) for row in rows), limit, offset)
 
+    def project_source_fingerprint(self, project_id: str) -> str:
+        """Return the same full-project source fingerprint used by artifacts."""
+
+        with self._lock:
+            self._require_row_locked(
+                self._conn, "research_projects", project_id, "研究项目"
+            )
+            return self._current_fingerprint_locked(
+                self._conn,
+                {"source_id": None, "project_id": project_id},
+            )
+
     def append_artifact_revision(
         self,
         artifact_id: str,
@@ -1858,7 +1870,7 @@ class ResearchRepository(SQLiteRepository):
     ) -> ArtifactRevision:
         """原子验证 comparison 的 project/source/evidence 边界并保存。"""
 
-        _validate_choice(created_by, {"model", "system"}, "created_by")
+        _validate_choice(created_by, {"model", "system", "user"}, "created_by")
         if not isinstance(expected_project_fingerprint, str) or not expected_project_fingerprint:
             raise ArtifactValidationError("必须提供生成开始时的 project fingerprint")
         selected = tuple(str(item).strip() for item in selected_source_ids)

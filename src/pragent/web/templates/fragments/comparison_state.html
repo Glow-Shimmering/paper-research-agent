@@ -1,0 +1,14 @@
+<div id="comparison-state">
+<section class="hero"><div><p class="eyebrow">Comparison matrix</p><h1>{{ matrix.title }}</h1><p>revision {{ revision.revision_number }} · {{ matrix.source_ids|length }} 篇来源 · {{ matrix.dimensions|length }} 个维度</p></div></section>
+{% if freshness.stale %}<div class="notice error">项目来源或内容已变化：当前矩阵已过期，历史版本仍可查看。</div>{% endif %}
+<section class="panel comparison-table-wrap">
+  <table class="comparison-table">
+    <thead><tr><th>来源</th>{% for dimension in matrix.dimensions %}<th>{{ dimension.label }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in rows %}<tr><th>{{ row.source_title }}</th>{% for cell in row.cells %}<td>{% include "fragments/comparison_cell.html" %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table>
+</section>
+<section class="panel">
+  <div class="section-heading"><h2>版本历史</h2><span>{{ history|length }} 个 revision</span></div>
+  <div class="history-list">{% for item in history %}<a href="/ui/projects/{{ project.id }}/comparisons/{{ artifact.id }}?revision_id={{ item.id }}">revision {{ item.revision_number }} · {{ item.created_by }} · {{ item.created_at }}</a>{% endfor %}</div>
+</section>
+</div>

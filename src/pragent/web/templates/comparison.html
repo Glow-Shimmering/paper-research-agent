@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ artifact.title }} · PRAgent{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}/comparisons">← 返回跨论文比较</a></p>
+{% include "fragments/comparison_state.html" %}
+{% endblock %}

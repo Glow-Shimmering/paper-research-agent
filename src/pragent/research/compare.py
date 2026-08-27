@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable, Optional, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from pragent.models import ArtifactRevision, ResearchArtifact
-from pragent.storage import ResearchRepository
+from pragent.storage import RecordVersionConflictError, ResearchRepository
 
 from .schemas import (
     COMPARISON_SCHEMA_VERSION,
@@ -164,6 +164,15 @@ class ComparisonWorkflow:
             prompt_version=COMPARISON_PROMPT_VERSION,
             schema_version=COMPARISON_SCHEMA_VERSION,
         )
+
+    def validate_prerequisites(
+        self, project_id: str, source_ids: Iterable[str]
+    ) -> None:
+        """Validate project scope and require current Deep Read cards without LLM work."""
+
+        selected = tuple(str(item).strip() for item in source_ids)
+        self._validate_sources(project_id, selected)
+        self._load_current_cards(project_id, selected)
 
     def _validate_sources(self, project_id: str, source_ids: tuple[str, ...]) -> None:
         if self.repository.get_project(project_id) is None:
@@ -452,6 +461,96 @@ class ComparisonArtifactService:
         updated = self.repository.get_artifact(artifact.id)
         if updated is None:  # pragma: no cover
             raise RuntimeError("Comparison artifact 保存后无法读取")
+        return SavedComparison(updated, revision)
+
+    def edit_cell(
+        self,
+        project_id: str,
+        artifact_id: str,
+        source_id: str,
+        dimension_key: str,
+        summary: str,
+        *,
+        expected_artifact_version: int,
+        insufficient_evidence: Optional[bool] = None,
+    ) -> SavedComparison:
+        artifact = self.repository.get_artifact(artifact_id)
+        if (
+            artifact is None
+            or artifact.project_id != project_id
+            or artifact.artifact_type != "comparison"
+            or artifact.source_id is not None
+        ):
+            raise KeyError("比较矩阵不存在")
+        if artifact.version != expected_artifact_version:
+            raise RecordVersionConflictError(f"研究 artifact {artifact_id} 版本冲突")
+        freshness = self.repository.artifact_freshness(artifact.id)
+        if freshness.stale or not freshness.current_fingerprint:
+            raise ValueError("项目来源已变化，请重新生成比较矩阵")
+        current = self.repository.get_current_artifact_revision(artifact.id)
+        if current is None:
+            raise ValueError("比较矩阵尚无 revision")
+        matrix = ComparisonMatrix.model_validate(current.content)
+        target = next(
+            (
+                cell
+                for cell in matrix.cells
+                if cell.source_id == source_id
+                and cell.dimension_key == dimension_key
+            ),
+            None,
+        )
+        if target is None:
+            raise KeyError("比较单元格不存在")
+
+        edited = matrix.model_copy(deep=True)
+        edited_target = next(
+            cell
+            for cell in edited.cells
+            if cell.source_id == source_id and cell.dimension_key == dimension_key
+        )
+        edited_target.summary = str(summary).strip()
+        if insufficient_evidence is True:
+            edited_target.insufficient_evidence = True
+            edited_target.evidence_refs = []
+            if not edited_target.summary:
+                edited_target.summary = "证据不足"
+        elif insufficient_evidence is False:
+            if not edited_target.evidence_refs:
+                raise ValueError("没有可保留的证据，不能标记为证据充分")
+            edited_target.insufficient_evidence = False
+        edited = ComparisonMatrix.model_validate(edited.model_dump(mode="json"))
+
+        refs = []
+        for cell in edited.cells:
+            field_path = f"$.cells.{cell.source_id}.{cell.dimension_key}"
+            for ordinal, ref in enumerate(cell.evidence_refs):
+                refs.append(
+                    (
+                        ref.evidence_id,
+                        field_path,
+                        ordinal,
+                        cell.source_id,
+                        ref.quote,
+                    )
+                )
+        revision = self.repository.append_validated_comparison_revision(
+            artifact.id,
+            edited.model_dump(mode="json"),
+            expected_artifact_version=expected_artifact_version,
+            expected_project_fingerprint=freshness.current_fingerprint,
+            selected_source_ids=edited.source_ids,
+            evidence_refs=refs,
+            created_by="user",
+            model=None,
+            usage={"llm_calls": 0, "operation": "cell_edit"},
+            finish_reason=None,
+            prompt_version="comparison-user-edit-v1",
+            schema_version=COMPARISON_SCHEMA_VERSION,
+        )
+        updated = self.repository.get_artifact(artifact.id)
+        if updated is None:  # pragma: no cover
+            raise RuntimeError("Comparison artifact 编辑后无法读取")
         return SavedComparison(updated, revision)
 
 

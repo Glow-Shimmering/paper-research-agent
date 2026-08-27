@@ -66,6 +66,8 @@ Deep Read 的模型 revision 使用更严格的原子保存入口：在同一个
 
 Project-level `comparison` artifact 同样使用专用原子保存入口。其 content 固定所选 2–20 个 project source、比较维度和完整 cell 矩阵；保存时验证项目 fingerprint、全部 source membership/index 状态，以及每条 cell evidence 是否属于声明来源且仍与当前 chunk/hash/quote 一致。content 中的 evidence refs 必须与待写入 `artifact_evidence` links 完全一致，防止通过省略 link 保存表面有引用但不可审计的矩阵。
 
+比较 cell 的人工编辑不会原位更新 content，而是用 artifact version 做 CAS 后追加 `created_by=user` revision。保留证据时重新验证全部 evidence；显式设为 `insufficient_evidence` 时，该 cell 的 refs 与 links 必须同时为空。项目 fingerprint 变化后 artifact 为 stale，历史仍可读取但不能继续派生人工 revision。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

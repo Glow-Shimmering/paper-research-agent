@@ -11,6 +11,10 @@ from .bm25 import Bm25Index
 from .models import SearchCorpusItem, SearchHit, SearchSnapshot
 
 _RRF_K = 60
+# 固定评测中 BM25 明显强于当前本地向量模型；适度提高词法路由权重，
+# 同时保留 BM25 无命中时完全由向量路由召回跨语言结果的能力。
+_RRF_BM25_WEIGHT = 1.5
+_RRF_VECTOR_WEIGHT = 1.0
 _RAW_TOP = 100  # 融合前各自取前 100 名
 _CACHE_MAX_ENTRIES = 8
 SearchMode = Literal["bm25", "vector", "rrf"]
@@ -127,9 +131,9 @@ def rrf_fuse(
 ) -> dict[int, float]:
     fused: dict[int, float] = {}
     for rank, (idx, _) in enumerate(bm25_hits, start=1):
-        fused[idx] = fused.get(idx, 0.0) + 1.0 / (k + rank)
+        fused[idx] = fused.get(idx, 0.0) + _RRF_BM25_WEIGHT / (k + rank)
     for rank, (idx, _) in enumerate(vec_hits, start=1):
-        fused[idx] = fused.get(idx, 0.0) + 1.0 / (k + rank)
+        fused[idx] = fused.get(idx, 0.0) + _RRF_VECTOR_WEIGHT / (k + rank)
     return fused
 
 

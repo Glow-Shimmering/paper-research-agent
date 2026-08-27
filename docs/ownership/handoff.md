@@ -31,6 +31,11 @@
    - 首次真实结果：BM25 `0.6000/0.5067`、vector `0.4333/0.3428`、RRF `0.6667/0.5122`（Recall@5/MRR）。
    - 5/5 示例回答通过引用合法性检查；人工证据支持率保持 `null`，等待真人复核，不宣称语义蕴含。
    - Windows 验证：`345 passed, 1 skipped`、临时目录 76 MB、Phase 3 offline smoke、`pip check`、Python compileall、`node --check`、wheel build/check 全部通过。
+5. `perf: weight lexical evidence in RRF`（本提交）
+   - 冻结 `pra-core-30-v1` 与三论文快照，只把 BM25/vector 的 RRF 权重从 `1.0/1.0` 调为 `1.5/1.0`。
+   - RRF Recall@5 从 `0.6667` 升至 `0.7000`，MRR 从 `0.5122` 升至 `0.5594`；4 题排名改善，无 paired regression。
+   - 明确标记为同一开发集上的 in-sample 结果；进一步调参前必须增加 holdout，不能把该结果宣称为泛化性能。
+   - Windows 验证：`345 passed, 1 skipped`、临时目录 76 MB、Phase 3 offline smoke、`pip check`、Python compileall、`node --check`、wheel build/check 全部通过。
 
 ## 当前状态
 
@@ -44,13 +49,12 @@ Web Agent 的闭合 transcript 现在可以跨进程恢复：
 
 仍未完成的产品化范围：页面刷新后重绘历史卡片、session 绑定 project，以及把冻结 pending action 跨重启恢复。这些属于产品路线 Step 25 的剩余部分，不能因 transcript 已完成而一并宣称完成。
 
-## 下一阶段：评测驱动检索调整
+## 下一阶段：人工复核与 holdout
 
-1. 先把评测脚手架作为独立提交，确认工作树干净。
-2. 冻结 `pra-core-30-v1` 与同一三论文 SQLite 快照，不为提高分数修改标签。
-3. 从 RRF 的 10 个失败题目中归纳一个可解释的检索问题并完成一次窄调整。
-4. 在同一快照重跑，报告 before/after Recall@5、MRR、延迟和 paired query delta。
-5. 将检索调整单独提交；如果指标没有改善，也如实记录并回退该调整，不污染评测基线提交。
+1. 由本人逐条检查数据中的 5 个 `answer_review`，只在真实核对后填写 `supported`、`mixed` 或 `unsupported`。
+2. 新增不参与当前权重选择的 holdout 问题，再验证 BM25 `1.5` / vector `1.0` 是否仍然成立。
+3. 在 holdout 就绪前不继续搜索 RRF 权重；当前 30 题只保留为 development set。
+4. Web Agent 产品化剩余范围仍是：刷新后重绘历史卡片、session 绑定 project、pending action 跨重启恢复。
 
 ## 在新电脑恢复
 

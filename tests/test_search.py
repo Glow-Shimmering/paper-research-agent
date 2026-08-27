@@ -315,8 +315,9 @@ def test_per_paper_cap(tmp_path):
 
 def test_rrf_fuse_math():
     fused = rrf_fuse([(0, 1.0), (1, 0.5)], [(1, 0.9), (0, 0.8)])
-    assert fused[0] == pytest.approx(1 / 61 + 1 / 62)
-    assert fused[1] == pytest.approx(1 / 62 + 1 / 61)
+    assert fused[0] == pytest.approx(1.5 / 61 + 1 / 62)
+    assert fused[1] == pytest.approx(1.5 / 62 + 1 / 61)
+    assert fused[0] > fused[1]
 
 
 def test_search_within_paper_requests_embeddings_and_accepts_dict_rows():

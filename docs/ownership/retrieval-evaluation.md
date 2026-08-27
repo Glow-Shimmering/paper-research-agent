@@ -58,3 +58,5 @@ $env:PRA_DATA_DIR = "D:\path\to\pra-eval-data"
 ## 下一步边界
 
 下一阶段只根据本报告的 paired query 失败明细提出一个可解释的检索调整，重新运行同一数据与快照，并独立提交 before/after 指标和逐题 delta。不得改问题或相关标签来美化调优结果。
+
+该调整现已完成，结果见[第一次评测驱动检索调整](retrieval-tuning.md)。

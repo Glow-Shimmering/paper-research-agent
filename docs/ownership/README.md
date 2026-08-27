@@ -6,7 +6,7 @@
 PDF -> 解析/分块 -> BM25/向量检索 -> RRF -> LLM -> 引用校验 -> CLI/Web
 ```
 
-首个真实三论文检索基线、30 题审计格式与复现命令见 [检索评测基线](retrieval-evaluation.md)。
+首个真实三论文检索基线、30 题审计格式与复现命令见 [检索评测基线](retrieval-evaluation.md)，第一次 paired 调整见[检索调优记录](retrieval-tuning.md)。
 
 Agent 部分只增加一条受控工具链：
 

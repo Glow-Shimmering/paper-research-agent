@@ -3,6 +3,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 import threading
+from typing import Literal
 
 import numpy as np
 
@@ -12,6 +13,7 @@ from .models import SearchCorpusItem, SearchHit, SearchSnapshot
 _RRF_K = 60
 _RAW_TOP = 100  # 融合前各自取前 100 名
 _CACHE_MAX_ENTRIES = 8
+SearchMode = Literal["bm25", "vector", "rrf"]
 
 
 @dataclass(frozen=True)
@@ -74,7 +76,6 @@ def _get_cached_corpus(store) -> _CachedCorpus:
         cached = _cache_get(requested_key)
         if cached is not None:
             return cached
-
     snapshot = store.search_snapshot()
     actual_key = (store.db_identity, snapshot.revision, snapshot.embed_model)
     with _CORPUS_CACHE_LOCK:
@@ -113,6 +114,12 @@ def _get_cached_corpus(store) -> _CachedCorpus:
             return cached
 
 
+def prepare_search_corpus(store) -> None:
+    """预构建检索语料缓存，使离线评测不把一次性建库时间计入 query latency。"""
+
+    _get_cached_corpus(store)
+
+
 def rrf_fuse(
     bm25_hits: list[tuple[int, float]],
     vec_hits: list[tuple[int, float]],
@@ -126,37 +133,67 @@ def rrf_fuse(
     return fused
 
 
-def hybrid_search(store, embedder, query: str, top: int = 10, per_paper_cap: int | None = None) -> list[SearchHit]:
-    """混合检索。空库返回 []。per_paper_cap 非空时每篇论文最多保留 cap 条。"""
+def retrieval_search(
+    store,
+    embedder,
+    query: str,
+    *,
+    mode: SearchMode = "rrf",
+    top: int = 10,
+    per_paper_cap: int | None = None,
+) -> list[SearchHit]:
+    """按 BM25、向量或 RRF 模式检索，供产品路径与离线评测共用。"""
+    if mode not in {"bm25", "vector", "rrf"}:
+        raise ValueError("mode 必须是 bm25、vector 或 rrf")
     corpus_cache = _get_cached_corpus(store)
     items = corpus_cache.items
     if not items:
         return []
-    current_model = getattr(embedder, "model_name", None)
-    if corpus_cache.embed_model is not None and corpus_cache.embed_model != current_model:
-        raise RuntimeError(
-            f"索引由嵌入模型「{corpus_cache.embed_model}」建立，"
-            f"当前查询模型为「{current_model}」。请切换回原模型，或使用 --force 全量重建索引。"
-        )
 
     paper_ids = [item.paper_id for item in items]
 
-    assert corpus_cache.bm25 is not None
-    bm25_hits = corpus_cache.bm25.search(query, top_k=_RAW_TOP)
+    bm25_hits: list[tuple[int, float]] = []
+    if mode in {"bm25", "rrf"}:
+        assert corpus_cache.bm25 is not None
+        bm25_hits = corpus_cache.bm25.search(query, top_k=_RAW_TOP)
 
-    matrix = corpus_cache.normalized_embeddings
-    q_vec = np.asarray(embedder.embed([query])[0], dtype=np.float32)
-    if q_vec.ndim != 1 or q_vec.shape[0] != matrix.shape[1]:
-        actual = q_vec.shape[0] if q_vec.ndim == 1 else tuple(q_vec.shape)
-        raise RuntimeError(
-            f"查询嵌入维度（{actual}）与索引维度（{matrix.shape[1]}）不一致，"
-            "请确认嵌入模型配置，或使用 --force 全量重建索引。"
+    vec_hits: list[tuple[int, float]] = []
+    if mode in {"vector", "rrf"}:
+        current_model = getattr(embedder, "model_name", None)
+        if (
+            corpus_cache.embed_model is not None
+            and corpus_cache.embed_model != current_model
+        ):
+            raise RuntimeError(
+                f"索引由嵌入模型「{corpus_cache.embed_model}」建立，"
+                f"当前查询模型为「{current_model}」。请切换回原模型，或使用 --force 全量重建索引。"
+            )
+        matrix = corpus_cache.normalized_embeddings
+        q_vec = np.asarray(embedder.embed([query])[0], dtype=np.float32)
+        if q_vec.ndim != 1 or q_vec.shape[0] != matrix.shape[1]:
+            actual = q_vec.shape[0] if q_vec.ndim == 1 else tuple(q_vec.shape)
+            raise RuntimeError(
+                f"查询嵌入维度（{actual}）与索引维度（{matrix.shape[1]}）不一致，"
+                "请确认嵌入模型配置，或使用 --force 全量重建索引。"
+            )
+        q_norm = q_vec / (np.linalg.norm(q_vec) or 1.0)
+        cos = matrix @ q_norm
+        vec_hits = [
+            (int(i), float(cos[i]))
+            for i in np.argsort(-cos)
+            if cos[i] > 0
+        ][:_RAW_TOP]
+
+    if mode == "bm25":
+        ranked = bm25_hits
+    elif mode == "vector":
+        ranked = vec_hits
+    else:
+        ranked = sorted(
+            rrf_fuse(bm25_hits, vec_hits).items(),
+            key=lambda kv: kv[1],
+            reverse=True,
         )
-    q_norm = q_vec / (np.linalg.norm(q_vec) or 1.0)
-    cos = matrix @ q_norm
-    vec_hits = [(int(i), float(cos[i])) for i in np.argsort(-cos) if cos[i] > 0][:_RAW_TOP]
-
-    ranked = sorted(rrf_fuse(bm25_hits, vec_hits).items(), key=lambda kv: kv[1], reverse=True)
 
     if per_paper_cap is not None:
         seen: dict[int, int] = {}
@@ -189,6 +226,24 @@ def hybrid_search(store, embedder, query: str, top: int = 10, per_paper_cap: int
         )
         for idx, score in ranked
     ]
+
+
+def hybrid_search(
+    store,
+    embedder,
+    query: str,
+    top: int = 10,
+    per_paper_cap: int | None = None,
+) -> list[SearchHit]:
+    """RRF 混合检索兼容入口。"""
+    return retrieval_search(
+        store,
+        embedder,
+        query,
+        mode="rrf",
+        top=top,
+        per_paper_cap=per_paper_cap,
+    )
 
 
 def search_within_paper(

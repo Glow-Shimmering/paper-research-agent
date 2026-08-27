@@ -6,7 +6,7 @@ import pytest
 
 import pragent.search as search_module
 from pragent.models import Chunk, Paper
-from pragent.search import hybrid_search, rrf_fuse, search_within_paper
+from pragent.search import hybrid_search, retrieval_search, rrf_fuse, search_within_paper
 from pragent.store import Store
 
 
@@ -56,6 +56,34 @@ def test_empty_library(tmp_path):
     s = Store(tmp_path / "t.db")
     hits = hybrid_search(s, FakeEmbedder(), "随便查查")
     assert hits == []
+
+
+def test_retrieval_search_exposes_bm25_vector_and_rrf_modes(tmp_path):
+    s = Store(tmp_path / "t.db")
+    keyword_vec = np.array([0.0, 1.0], dtype=np.float32)
+    semantic_vec = np.array([1.0, 0.0], dtype=np.float32)
+    pid = s.upsert_paper(
+        make_paper("modes.pdf"),
+        [
+            Chunk(None, 0, 0, 1, "unique keyword", keyword_vec),
+            Chunk(None, 0, 1, 2, "different vocabulary", semantic_vec),
+            Chunk(None, 0, 2, 3, "third distractor", np.array([0.5, 0.5])),
+        ],
+    )
+    assert pid == 1
+    s.meta_set("embed_model", "fake")
+    embedder = FakeEmbedder({"unique keyword": semantic_vec})
+
+    bm25 = retrieval_search(s, embedder, "unique keyword", mode="bm25", top=2)
+    vector = retrieval_search(s, embedder, "unique keyword", mode="vector", top=2)
+    rrf = retrieval_search(s, embedder, "unique keyword", mode="rrf", top=2)
+
+    assert [hit.chunk_id for hit in bm25] == [1]
+    assert vector[0].chunk_id == 2
+    assert {hit.chunk_id for hit in rrf} == {1, 2}
+    with pytest.raises(ValueError, match="mode"):
+        retrieval_search(s, embedder, "x", mode="invalid")
+    s.close()
 
 
 def test_embedding_model_mismatch_fails_before_query_embedding(tmp_path):

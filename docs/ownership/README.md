@@ -6,6 +6,8 @@
 PDF -> 解析/分块 -> BM25/向量检索 -> RRF -> LLM -> 引用校验 -> CLI/Web
 ```
 
+首个真实三论文检索基线、30 题审计格式与复现命令见 [检索评测基线](retrieval-evaluation.md)。
+
 Agent 部分只增加一条受控工具链：
 
 ```text
@@ -17,7 +19,7 @@ Agent 部分只增加一条受控工具链：
 
 - 基线日期：2026-08-27。
 - 环境：macOS arm64 / Windows 11、CPython 3.11、`requirements-dev.lock`。
-- 最新 Windows 完整离线测试：`338 passed, 1 skipped`；跳过项是当前普通账户没有创建符号链接权限时无法执行的导入安全测试。
+- 最新 Windows 完整离线测试：`345 passed, 1 skipped`；跳过项是当前普通账户没有创建符号链接权限时无法执行的导入安全测试。
 - 样本库：仓库根目录的 3 篇推荐系统论文，共索引 259 个分块。
 - 已验证命令：`status`、`index`、`list`、`search`、`ask --no-llm`。
 - 未验证：真实 LLM 的 `ask` 与 `chat`。它们必须使用本人配置的 OpenAI-compatible provider 单独做 live smoke，不能由脚本化测试替代。

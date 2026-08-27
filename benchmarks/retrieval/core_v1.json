@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "name": "pra-core-30-v1",
+  "expected_case_count": 30,
+  "description": "Three-paper retrieval benchmark with manually selected, exact chunk excerpts. Chinese cases exercise cross-lingual retrieval; English cases exercise lexical and semantic retrieval.",
+  "cases": [
+    {
+      "id": "crab-01-root-causes",
+      "query": "CRAB identifies what two root causes of popularity bias in generative recommendation?",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 1, "evidence_excerpt": "imbalanced tokenization inherits and can further amplify popularity", "note": "Abstract statement of the first root cause."}],
+      "tags": ["crab", "en", "motivation"],
+      "answer_review": {"answer": "The paper attributes the bias to imbalanced tokenization and training that favors popular tokens [E:ev_78ce9b9a9e3d0f6549b2f52dd1d78656f2b2a7f2a19949af7274eee4da5b7f34].", "allowed_evidence_ids": ["ev_78ce9b9a9e3d0f6549b2f52dd1d78656f2b2a7f2a19949af7274eee4da5b7f34"], "human_support": "not_reviewed", "note": "Citation scope is machine-checkable; semantic support awaits human review."}
+    },
+    {
+      "id": "crab-02-popular-definition",
+      "query": "CRAB 如何定义 popular items？",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 4, "evidence_excerpt": "top 20% of items by historical interaction frequency as popular"}],
+      "tags": ["crab", "zh", "definition"]
+    },
+    {
+      "id": "crab-03-two-stage-method",
+      "query": "What are the two stages of the CRAB debiasing method?",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 6, "evidence_excerpt": "second stage, we introduce a hierarchy-aware regularizer"}],
+      "tags": ["crab", "en", "method"]
+    },
+    {
+      "id": "crab-04-token-groups",
+      "query": "CRAB 按流行度把 token 分成哪三个组，比例是多少？",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 12, "evidence_excerpt": "top 5% over-popular tokens", "note": "The same chunk also defines the 5%-95% neutral and remaining 5% unpopular groups."}],
+      "tags": ["crab", "zh", "definition"]
+    },
+    {
+      "id": "crab-05-regularized-kmeans",
+      "query": "How is splitting an over-popular token formulated in CRAB?",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 17, "evidence_excerpt": "can be formulated as a regularized K-means problem"}],
+      "tags": ["crab", "en", "method"]
+    },
+    {
+      "id": "crab-06-hierarchical-regularizer",
+      "query": "层次语义对齐正则项如何帮助新 token 和弱表示 token？",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 19, "evidence_excerpt": "tokens sharing the same parent"}],
+      "tags": ["crab", "zh", "method"]
+    },
+    {
+      "id": "crab-07-training-objective",
+      "query": "What is the joint optimization objective used by CRAB?",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 20, "evidence_excerpt": "recommendation loss", "note": "The chunk gives L = LRec + gamma LT."}],
+      "tags": ["crab", "en", "objective"]
+    },
+    {
+      "id": "crab-08-protocol-metrics",
+      "query": "CRAB 的数据划分比例和主要评测指标是什么？",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 21, "evidence_excerpt": "with an 8:1:1 ratio"}],
+      "tags": ["crab", "zh", "experiment"]
+    },
+    {
+      "id": "crab-09-implementation",
+      "query": "Which backbone, GPUs, epochs, and LoRA rank were used to implement CRAB?",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 22, "evidence_excerpt": "using Qwen2-0.5B as the backbone"}],
+      "tags": ["crab", "en", "implementation"],
+      "answer_review": {"answer": "CRAB uses Qwen2-0.5B, four NVIDIA A100 GPUs, 10 epochs, and LoRA rank 8 [E:ev_1734557e61d42258f0e240acfbcf1f134e883b4f4fd4e6b578c59aa8eea8c268].", "allowed_evidence_ids": ["ev_1734557e61d42258f0e240acfbcf1f134e883b4f4fd4e6b578c59aa8eea8c268"], "human_support": "not_reviewed"}
+    },
+    {
+      "id": "crab-10-splitting-ratio",
+      "query": "为什么 CRAB 不宜过度拆分 popular tokens？",
+      "relevant": [{"paper_sha256": "028da916f1a7d990cec1d59566a3f1e36330a54dcdcb4b8589548ef5cdcc7d76", "chunk_seq": 25, "evidence_excerpt": "over-splitting tokens may disrupt the semantic integrity"}],
+      "tags": ["crab", "zh", "ablation"]
+    },
+
+    {
+      "id": "baco-01-table-size",
+      "query": "How large can a 64-dimensional FP32 user embedding table be for three billion users?",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 5, "evidence_excerpt": "715 GB of space for"}],
+      "tags": ["baco", "en", "motivation"]
+    },
+    {
+      "id": "baco-02-louvain-limit",
+      "query": "BACO 指出 Louvain 方法有什么固有缺陷？",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 9, "evidence_excerpt": "inherent drawback of resolution limit"}],
+      "tags": ["baco", "zh", "motivation"]
+    },
+    {
+      "id": "baco-03-quality-factors",
+      "query": "What two cluster properties characterize high-quality sketching matrices in BACO?",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 27, "evidence_excerpt": "avoiding imbalanced cluster sizes"}],
+      "tags": ["baco", "en", "insight"]
+    },
+    {
+      "id": "baco-04-objective-hardness",
+      "query": "BACO 的图划分优化为什么难，使用什么正则平衡聚类大小？",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 30, "evidence_excerpt": "which is proved NP-hard", "note": "The same chunk identifies weighted exclusive lasso for size balance."}],
+      "tags": ["baco", "zh", "objective"]
+    },
+    {
+      "id": "baco-05-hybrid-weighting",
+      "query": "Why does BACO introduce a hybrid weighting scheme for users and items?",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 38, "evidence_excerpt": "causes flawed cluster assignments"}],
+      "tags": ["baco", "en", "method"]
+    },
+    {
+      "id": "baco-06-label-update",
+      "query": "BACO 的标签传播每轮怎样为节点选择新标签？",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 41, "evidence_excerpt": "highest likelihood among all"}],
+      "tags": ["baco", "zh", "algorithm"]
+    },
+    {
+      "id": "baco-07-secondary-clusters",
+      "query": "Why does BACO assign each user to two clusters?",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 44, "evidence_excerpt": "e-commerce users have multiple, evolving interests"}],
+      "tags": ["baco", "en", "method"]
+    },
+    {
+      "id": "baco-08-complexity",
+      "query": "完整 BACO 算法的时间复杂度是多少，迭代上限通常取多少？",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 47, "evidence_excerpt": "typically 8", "note": "The chunk states T is typically 8 and gives O(|U| + |V| + T|E|)."}],
+      "tags": ["baco", "zh", "complexity"]
+    },
+    {
+      "id": "baco-09-evaluation-protocol",
+      "query": "Which metrics, cutoff, backbone, and loss does the BACO evaluation protocol use?",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 50, "evidence_excerpt": "with 𝐾= 20 by default"}],
+      "tags": ["baco", "en", "experiment"],
+      "answer_review": {"answer": "The protocol uses Recall@20 and NDCG@20 with LightGCN and BPR loss [E:ev_b3c2abf99e20644ddbf412381e101f20a2e993926b478f749fc26e8fd4e2b34e].", "allowed_evidence_ids": ["ev_b3c2abf99e20644ddbf412381e101f20a2e993926b478f749fc26e8fd4e2b34e"], "human_support": "not_reviewed"}
+    },
+    {
+      "id": "baco-10-speedups",
+      "query": "BACO 在四个数据集上相对最佳基线分别实现了多少倍加速？",
+      "relevant": [{"paper_sha256": "32e8124f463f57f95036a496527f1408fc4a7b79c10138fc1e47d6d265a8e057", "chunk_seq": 53, "evidence_excerpt": "BACO achieves speedups of 400×"}],
+      "tags": ["baco", "zh", "result"]
+    },
+
+    {
+      "id": "recoatlas-01-online-ab",
+      "query": "Why is online A/B testing not used as the basis of the RecoAtlas open benchmark?",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 5, "evidence_excerpt": "requires production infrastructure"}],
+      "tags": ["recoatlas", "en", "motivation"]
+    },
+    {
+      "id": "recoatlas-02-task-families",
+      "query": "RecoAtlas 的 comparative shopping 与 bundle shopping 对推荐集合的要求有何不同？",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 20, "evidence_excerpt": "bundle shopping emphasizes complementarity"}],
+      "tags": ["recoatlas", "zh", "task"]
+    },
+    {
+      "id": "recoatlas-03-output-constraints",
+      "query": "How does RecoAtlas handle invalid IDs, duplicate IDs, and short reports?",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 21, "evidence_excerpt": "Invalid or out-of-catalog IDs"}],
+      "tags": ["recoatlas", "en", "protocol"]
+    },
+    {
+      "id": "recoatlas-04-three-views",
+      "query": "RecoAtlas 用哪三类互补视角评价报告质量？",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 22, "evidence_excerpt": "three complementary views"}],
+      "tags": ["recoatlas", "zh", "metric"],
+      "answer_review": {"answer": "It reports exact recovery, behavior-trained reward-model scores, and LLM-judge scores [E:ev_11e4a4ac7db14001ad6c251fa5142f8fcb11260768af917f816b0742462d8b6e].", "allowed_evidence_ids": ["ev_11e4a4ac7db14001ad6c251fa5142f8fcb11260768af917f816b0742462d8b6e"], "human_support": "not_reviewed"}
+    },
+    {
+      "id": "recoatlas-05-judge-separation",
+      "query": "Why are LLM-judge metrics reported separately from behavior-grounded scores?",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 27, "evidence_excerpt": "do not necessarily imply behavioral utility"}],
+      "tags": ["recoatlas", "en", "metric"]
+    },
+    {
+      "id": "recoatlas-06-episode-count",
+      "query": "RecoAtlas 每种方法一共运行多少个 agent episodes，工具决策最多多少轮？",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 32, "evidence_excerpt": "3 × 2 × 250 = 1500 agent episodes per evaluated method"}],
+      "tags": ["recoatlas", "zh", "experiment"]
+    },
+    {
+      "id": "recoatlas-07-tool-contribution",
+      "query": "What happens to bundle SetHit@20 when complementarity is added to search?",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 38, "evidence_excerpt": "bundle SetHit@20 to 0.460"}],
+      "tags": ["recoatlas", "en", "result"]
+    },
+    {
+      "id": "recoatlas-08-scaling-design",
+      "query": "为什么 RecoAtlas 的规模与测试时计算实验选择 Qwen3 系列？",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 39, "evidence_excerpt": "broad size range"}],
+      "tags": ["recoatlas", "zh", "experiment"]
+    },
+    {
+      "id": "recoatlas-09-faulty-tools",
+      "query": "How does increasing the faulty-tool rate affect comparative and bundle SetHit@20?",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 50, "evidence_excerpt": "Comparative SetHit@20 drops from 0.406", "note": "The same chunk reports bundle SetHit@20 dropping from 0.392 to 0.124."}],
+      "tags": ["recoatlas", "en", "robustness"],
+      "answer_review": {"answer": "At faulty-tool rates from 25% to 75%, comparative SetHit@20 drops from 0.406 to 0.205 and bundle SetHit@20 from 0.392 to 0.124 [E:ev_ccaa4294ed9162685a4172aec16c55c2e2f897ce2dfc6e9a5aa1d0affb3157f9].", "allowed_evidence_ids": ["ev_ccaa4294ed9162685a4172aec16c55c2e2f897ce2dfc6e9a5aa1d0affb3157f9"], "human_support": "not_reviewed"}
+    },
+    {
+      "id": "recoatlas-10-query-mixture",
+      "query": "RecoAtlas 的检索监督包含哪四类查询，各占多大比例？",
+      "relevant": [{"paper_sha256": "76a411df9394d7ea28e74a0ab94b41f398200b42077281e31ba6dbf7b61db5e4", "chunk_seq": 75, "evidence_excerpt": "40% standard need-based queries"}],
+      "tags": ["recoatlas", "zh", "data"]
+    }
+  ]
+}

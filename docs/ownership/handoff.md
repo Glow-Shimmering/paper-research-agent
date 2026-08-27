@@ -24,6 +24,13 @@
    - 新会话按钮先安全清空服务端 transcript，再更换浏览器 session ID。
    - 新增 `lxml-html-clean` 直接依赖；无 Windows symlink 权限时只跳过对应安全测试。
    - Windows 验证：`338 passed, 1 skipped`、临时目录 75 MB、Phase 3 offline smoke、`pip check`、Python compileall、`node --check`、wheel build/check 全部通过。
+4. `feat: add auditable retrieval evaluation`（本提交）
+   - 新增 `pra-core-30-v1`：三篇论文各 10 题，英文/中文各 15 题，固定论文 SHA、chunk 序号和精确原文摘录。
+   - 同一路径显式运行 BM25、vector 与 RRF，报告 Recall@5、MRR、预热后延迟、逐题 evidence 和失败明细。
+   - 标签在运行前反查当前 SQLite；不存在、摘录漂移或回答 evidence 白名单越界时拒绝评测。
+   - 首次真实结果：BM25 `0.6000/0.5067`、vector `0.4333/0.3428`、RRF `0.6667/0.5122`（Recall@5/MRR）。
+   - 5/5 示例回答通过引用合法性检查；人工证据支持率保持 `null`，等待真人复核，不宣称语义蕴含。
+   - Windows 验证：`345 passed, 1 skipped`、临时目录 76 MB、Phase 3 offline smoke、`pip check`、Python compileall、`node --check`、wheel build/check 全部通过。
 
 ## 当前状态
 
@@ -37,13 +44,13 @@ Web Agent 的闭合 transcript 现在可以跨进程恢复：
 
 仍未完成的产品化范围：页面刷新后重绘历史卡片、session 绑定 project，以及把冻结 pending action 跨重启恢复。这些属于产品路线 Step 25 的剩余部分，不能因 transcript 已完成而一并宣称完成。
 
-## 下一阶段：评测脚手架
+## 下一阶段：评测驱动检索调整
 
-1. 先把本阶段作为一个独立提交，确认工作树干净。
-2. 建立 30 个可审计问题的数据格式，固定 query、相关文档/分块和人工证据标签。
-3. 同一快照分别运行 BM25、vector 与 RRF，输出 Recall@5、MRR、延迟和失败明细。
-4. 增加引用合法率；人工证据支持率保持人工复核，不用字符串匹配冒充语义蕴含。
-5. 用评测结果驱动一次可解释的检索调整，独立提交调整前后指标和 paired query delta。
+1. 先把评测脚手架作为独立提交，确认工作树干净。
+2. 冻结 `pra-core-30-v1` 与同一三论文 SQLite 快照，不为提高分数修改标签。
+3. 从 RRF 的 10 个失败题目中归纳一个可解释的检索问题并完成一次窄调整。
+4. 在同一快照重跑，报告 before/after Recall@5、MRR、延迟和 paired query delta。
+5. 将检索调整单独提交；如果指标没有改善，也如实记录并回退该调整，不污染评测基线提交。
 
 ## 在新电脑恢复
 

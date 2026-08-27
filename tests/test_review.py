@@ -17,6 +17,9 @@ from pragent.research import (
     ReviewOutlinePrerequisiteError,
     ReviewOutlineSchemaError,
     ReviewOutlineWorkflow,
+    ReviewSectionArtifactService,
+    ReviewSectionDraft,
+    ReviewSectionWorkflow,
 )
 from pragent.storage import ArtifactValidationError, JobRepository, ResearchRepository
 from pragent.store import Store
@@ -96,6 +99,58 @@ class ScriptedReviewLLM:
                 "usage": {"total_tokens": 7},
                 "finish_reason": "stop",
                 "response_id": f"review-{len(self.calls)}",
+            },
+        }
+
+
+class ScriptedSectionLLM:
+    model = "scripted-review-section"
+    is_configured = True
+
+    def __init__(self, *, invalid_first=False, forged=False, on_call=None):
+        self.invalid_first = invalid_first
+        self.forged = forged
+        self.calls = []
+        self._valid = None
+        self.on_call = on_call
+        self._callback_used = False
+
+    def chat_with_metadata(self, system, user):
+        self.calls.append((system, user))
+        if "修复下列 JSON" in system:
+            content = json.dumps(self._valid, ensure_ascii=False)
+        else:
+            section = json.loads(user)["section"]
+            tokens = [
+                dict(item)
+                for item in section["planned_claims"][0]["evidence_refs"]
+            ]
+            if self.forged:
+                tokens[0]["quote"] = "rewritten review quote"
+            self._valid = {
+                "claims": [
+                    {
+                        "key": "method_synthesis",
+                        "text": "两篇论文采用了可比较但边界不同的方法设计。",
+                        "citation_tokens": tokens,
+                        "insufficient_evidence": False,
+                    }
+                ]
+            }
+            content = (
+                "not-json"
+                if self.invalid_first and len(self.calls) == 1
+                else json.dumps(self._valid, ensure_ascii=False)
+            )
+        if self.on_call is not None and not self._callback_used:
+            self._callback_used = True
+            self.on_call()
+        return {
+            "content": content,
+            "metadata": {
+                "usage": {"total_tokens": 9},
+                "finish_reason": "stop",
+                "response_id": f"section-{len(self.calls)}",
             },
         }
 
@@ -190,6 +245,16 @@ def _revision_refs(outline: ReviewOutline):
                     )
                 )
     return refs
+
+
+def _saved_outline(repository, project, question, source_ids, comparison):
+    return ReviewOutlineArtifactService(repository).generate_and_save(
+        project.id,
+        [question.id],
+        source_ids,
+        comparison.artifact.id,
+        ReviewOutlineWorkflow(repository, ScriptedReviewLLM()),
+    )
 
 
 def test_review_outline_uses_questions_sources_and_current_comparison(tmp_path):
@@ -384,6 +449,220 @@ def test_review_outline_runs_through_persistent_worker(tmp_path):
     assert current.status == "succeeded"
     artifact = repository.get_artifact(current.result["artifact_id"])
     assert artifact is not None and artifact.artifact_type == "review_outline"
+    jobs.close()
+    repository.close()
+    store.close()
+
+
+def test_review_section_uses_only_outline_tokens_and_repairs_once(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    outline = _saved_outline(
+        repository, project, question, source_ids, comparison
+    )
+    repaired = ReviewSectionWorkflow(
+        repository, ScriptedSectionLLM(invalid_first=True)
+    ).generate(project.id, outline.artifact.id, "methods")
+
+    assert repaired.draft.outline_revision_id == outline.revision.id
+    assert repaired.draft.section_key == "methods"
+    assert len(repaired.draft.claims[0].citation_tokens) == 2
+    assert repaired.usage["llm_calls"] == 2
+    assert repaired.usage["repair_used"] is True
+    assert repaired.usage["total_tokens"] == 18
+    with pytest.raises(ReviewOutlineSchemaError, match="超出提纲证据范围"):
+        ReviewSectionWorkflow(
+            repository, ScriptedSectionLLM(forged=True)
+        ).generate(project.id, outline.artifact.id, "methods")
+    repository.close()
+    store.close()
+
+
+def test_review_section_rechecks_outline_freshness_after_generation(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    outline = _saved_outline(
+        repository, project, question, source_ids, comparison
+    )
+
+    def add_source_during_generation():
+        paper_id = store.upsert_paper(
+            make_paper("late-source.pdf", title="Late source", sha256="d" * 64)
+        )
+        late_source = repository.ensure_source_for_paper(paper_id)
+        repository.add_project_source(project.id, late_source.id)
+
+    with pytest.raises(ReviewOutlinePrerequisiteError, match="已过期"):
+        ReviewSectionWorkflow(
+            repository,
+            ScriptedSectionLLM(on_call=add_source_during_generation),
+        ).generate(project.id, outline.artifact.id, "methods")
+    repository.close()
+    store.close()
+
+
+def test_review_section_rejects_outline_after_question_changes(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    outline = _saved_outline(
+        repository, project, question, source_ids, comparison
+    )
+    repository.update_question(
+        question.id,
+        project_id=project.id,
+        expected_version=question.version,
+        question="修改后的研究问题",
+    )
+
+    with pytest.raises(ReviewOutlinePrerequisiteError, match="研究问题已变化"):
+        ReviewSectionWorkflow(
+            repository, ScriptedSectionLLM()
+        ).generate(project.id, outline.artifact.id, "methods")
+    repository.close()
+    store.close()
+
+
+def test_review_section_save_edit_and_insufficient_revisions(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    outline = _saved_outline(
+        repository, project, question, source_ids, comparison
+    )
+    service = ReviewSectionArtifactService(repository)
+    saved = service.generate_and_save(
+        project.id,
+        outline.artifact.id,
+        "methods",
+        ReviewSectionWorkflow(repository, ScriptedSectionLLM()),
+    )
+
+    assert saved.artifact.artifact_type == "review_section"
+    assert saved.revision.model == "scripted-review-section"
+    assert len(repository.list_artifact_evidence(saved.revision.id)) == 2
+    edited = service.edit_claim(
+        project.id,
+        saved.artifact.id,
+        "method_synthesis",
+        "人工修订后的章节主张。",
+        expected_artifact_version=saved.artifact.version,
+    )
+    edited_draft = ReviewSectionDraft.model_validate(edited.revision.content)
+    assert edited.revision.revision_number == 2
+    assert edited.revision.created_by == "user"
+    assert edited_draft.claims[0].text == "人工修订后的章节主张。"
+    assert len(edited_draft.claims[0].citation_tokens) == 2
+    insufficient = service.edit_claim(
+        project.id,
+        saved.artifact.id,
+        "method_synthesis",
+        "目前证据不足，暂不形成结论。",
+        expected_artifact_version=edited.artifact.version,
+        insufficient_evidence=True,
+    )
+    insufficient_draft = ReviewSectionDraft.model_validate(
+        insufficient.revision.content
+    )
+    assert insufficient_draft.claims[0].insufficient_evidence is True
+    assert insufficient_draft.claims[0].citation_tokens == []
+    assert repository.list_artifact_evidence(insufficient.revision.id) == ()
+    repository.close()
+    store.close()
+
+
+def test_review_section_atomic_save_rejects_token_outside_outline(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    outline = _saved_outline(
+        repository, project, question, source_ids, comparison
+    )
+    result = ReviewSectionWorkflow(
+        repository, ScriptedSectionLLM()
+    ).generate(project.id, outline.artifact.id, "methods")
+    source = repository.get_source(source_ids[0])
+    extra = store.pin_evidence(store.paper_chunks(source.indexed_paper_id)[1].id)
+    content = result.draft.model_dump(mode="json")
+    token = content["claims"][0]["citation_tokens"][0]
+    token["evidence_id"] = extra.id
+    token["quote"] = "Extra project evidence 0"
+    forged = ReviewSectionDraft.model_validate(content)
+    artifact = repository.create_artifact(
+        project.id, "review_section", status="generating"
+    )
+    refs = []
+    for claim_index, claim in enumerate(forged.claims):
+        for ordinal, ref in enumerate(claim.citation_tokens):
+            refs.append(
+                (
+                    ref.evidence_id,
+                    f"$.claims.{claim_index}",
+                    ordinal,
+                    ref.source_id,
+                    ref.quote,
+                )
+            )
+
+    with pytest.raises(ArtifactValidationError, match="超出提纲证据范围"):
+        repository.append_validated_review_section_revision(
+            artifact.id,
+            forged.model_dump(mode="json"),
+            expected_artifact_version=artifact.version,
+            expected_project_fingerprint=repository.project_source_fingerprint(
+                project.id
+            ),
+            outline_artifact_id=outline.artifact.id,
+            outline_revision_id=outline.revision.id,
+            section_key="methods",
+            evidence_refs=refs,
+            created_by="model",
+            model=result.model,
+            usage=result.usage,
+            finish_reason=result.finish_reason,
+            prompt_version=result.prompt_version,
+            schema_version=result.schema_version,
+        )
+    assert repository.get_artifact(artifact.id).current_revision_number == 0
+    repository.close()
+    store.close()
+
+
+def test_review_section_runs_through_persistent_worker(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    outline = _saved_outline(
+        repository, project, question, source_ids, comparison
+    )
+    jobs = JobRepository(store.db_path)
+    queued = JobQueue(jobs).enqueue(
+        "review_section",
+        {
+            "project_id": project.id,
+            "outline_artifact_id": outline.artifact.id,
+            "section_key": "methods",
+        },
+        project_id=project.id,
+        idempotent=True,
+        idempotency_key=f"review-section:{outline.artifact.id}:methods",
+        timeout_seconds=30,
+    )
+    app = create_app(
+        store=store,
+        research_repository=repository,
+        job_repository=jobs,
+        llm=ScriptedSectionLLM(),
+        job_worker_count=1,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1"):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            current = jobs.get(queued.id)
+            if current is not None and current.status in {
+                "succeeded",
+                "failed",
+                "cancelled",
+            }:
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("review section job did not finish")
+
+    assert current.status == "succeeded"
+    artifact = repository.get_artifact(current.result["artifact_id"])
+    assert artifact is not None and artifact.artifact_type == "review_section"
     jobs.close()
     repository.close()
     store.close()

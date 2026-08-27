@@ -303,7 +303,11 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
   - 证据：有证据 claim 的每个声明来源都必须复用绑定 comparison 中同来源的 evidence/逐字 quote；不足证据显式为空 refs；全流程有 call/context/token 预算且最多一次 repair。
   - 保存：专用事务复验问题快照、project fingerprint、comparison 当前性、来源 membership/index 和 comparison-scoped evidence/quote；已接入持久 `review_outline` worker。
   - 验证：`tests/test_review.py` 6 个合同测试；Windows 完整回归 `363 passed, 1 skipped`，临时目录 83 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check 全部通过。
-- [ ] Step 20：实现 section draft workflow 与编辑/version；claim 使用结构化 source/evidence tokens，生成后做 citation scope/freshness 校验。
+- [x] Step 20：实现 section draft workflow 与编辑/version；claim 使用结构化 source/evidence tokens，生成后做 citation scope/freshness 校验。
+  - 合同：section draft 固定绑定当前 review outline revision/section；有序 claim 使用结构化 source/evidence/exact-quote tokens，或明确 `insufficient_evidence`。
+  - 校验：LLM 输出只可复用 section planned claims 的 token，最多一次 repair；生成后复查 outline revision/freshness，保存事务再次验证 outline 当前性、project fingerprint、来源、chunk/hash 与 quote。
+  - 编辑：artifact version CAS 追加 user revision；默认保留 citations，显式证据不足时同步清空 tokens/links；已接入持久 `review_section` worker。
+  - 验证：`tests/test_review.py` 共 12 个 outline/section 合同测试；Windows 完整回归 `369 passed, 1 skipped`，临时目录 85 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check 全部通过。
 - [ ] Step 21：实现 Review UI：提纲调整、逐节生成/重试、证据检查、整稿预览；不允许模型静默添加项目外论文。
 
 **Gate：** 选 3 篇真实论文可生成对比矩阵、综述提纲和至少一节草稿；所有引用均映射到项目来源和 evidence，证据不足明确显示。

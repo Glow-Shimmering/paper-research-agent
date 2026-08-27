@@ -75,6 +75,10 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 
 保存使用专用原子入口：同一事务重新验证研究问题文本/version、完整 project fingerprint、comparison 当前 revision、所选来源 membership/index，以及 evidence 确实出现在绑定的 comparison、属于声明来源、chunk/hash 当前且 quote 为原文子串。提纲已注册为持久 `review_outline` worker job；创建与调整 UI 属于 Step 21。
 
+`review_section` workflow 只接受当前 ready、未 stale 的 review outline 及其中一个 section。章节正文是有序 claim 列表；每条 claim 使用结构化 `source_id + evidence_id + exact quote` citation tokens，或者显式 `insufficient_evidence`。模型返回后再次检查 outline revision/freshness，随后保存事务把 token 限制在该 section planned claims 的证据集合，并再次验证来源、chunk/hash 与 quote。
+
+章节人工编辑以 artifact version CAS 追加 `created_by=user` revision；默认保留原 citation tokens，也可以显式切换为证据不足并同时清空 refs/links。章节生成已注册为持久 `review_section` worker job；确定性正文/引用渲染和交互页面分别由后续导出与 Step 21 完成。
+
 ## 8. JSON API
 
 新能力位于 `/api/v1`：

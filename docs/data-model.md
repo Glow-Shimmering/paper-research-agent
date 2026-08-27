@@ -70,6 +70,8 @@ Project-level `comparison` artifact 同样使用专用原子保存入口。其 c
 
 `review_outline` 是 project-level artifact。content 固定研究问题的 id/text/version 快照、2–20 个来源、绑定的 comparison artifact/revision，以及章节与 planned claims。专用保存事务要求问题快照仍当前、comparison 仍为当前未漂移 revision，并把每条 claim evidence 限制在该 comparison 已使用的同 source 精确 quote；因此仅属于项目但没有进入比较矩阵的 evidence 也不能旁路写入提纲。
 
+`review_section` 同样是 project-level artifact，并固定绑定当前 review outline revision 与 section key。content 由稳定 claim key、文本和结构化 citation tokens 组成；专用保存事务只接受该 outline section planned claims 已出现的 source/evidence/quote 三元组。人工编辑新增 revision，不覆盖模型稿；切换为 `insufficient_evidence` 时对应 claim 的 tokens 和 `artifact_evidence` links 同时为空。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

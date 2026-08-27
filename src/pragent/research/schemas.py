@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DEEP_READ_SCHEMA_VERSION = 1
 COMPARISON_SCHEMA_VERSION = 1
 REVIEW_OUTLINE_SCHEMA_VERSION = 1
+REVIEW_SECTION_SCHEMA_VERSION = 1
 DEEP_READ_FIELD_ORDER = (
     "research_question",
     "related_work",
@@ -266,4 +267,64 @@ class ReviewOutline(BaseModel):
         selected = set(self.source_ids)
         if any(not set(section.source_ids) <= selected for section in self.sections):
             raise ValueError("综述 section 引用了未选择来源")
+        return self
+
+
+class ReviewDraftClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    key: str = Field(min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    text: str = Field(min_length=1, max_length=12000)
+    citation_tokens: list[ReviewSourceEvidenceRef] = Field(
+        default_factory=list, max_length=40
+    )
+    insufficient_evidence: bool = False
+
+    @model_validator(mode="after")
+    def validate_citations(self) -> "ReviewDraftClaim":
+        if self.insufficient_evidence:
+            if self.citation_tokens:
+                raise ValueError("证据不足的 section claim 不能包含 citation tokens")
+            return self
+        if not self.citation_tokens:
+            raise ValueError("section claim 必须包含 citation tokens 或明确证据不足")
+        identities = [
+            (item.source_id, item.evidence_id) for item in self.citation_tokens
+        ]
+        if len(identities) != len(set(identities)):
+            raise ValueError("同一 section claim 不能重复引用 citation token")
+        return self
+
+
+class ReviewSectionPayload(BaseModel):
+    """LLM 输出合同；artifact/outline provenance 由系统包装。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claims: list[ReviewDraftClaim] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_unique_claims(self) -> "ReviewSectionPayload":
+        keys = [item.key for item in self.claims]
+        if len(keys) != len(set(keys)):
+            raise ValueError("section draft claim key 不能重复")
+        return self
+
+
+class ReviewSectionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outline_artifact_id: str = Field(min_length=1, max_length=96)
+    outline_revision_id: str = Field(min_length=1, max_length=96)
+    section_key: str = Field(
+        min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    section_title: str = Field(min_length=1, max_length=200)
+    claims: list[ReviewDraftClaim] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_unique_claims(self) -> "ReviewSectionDraft":
+        keys = [item.key for item in self.claims]
+        if len(keys) != len(set(keys)):
+            raise ValueError("section draft claim key 不能重复")
         return self

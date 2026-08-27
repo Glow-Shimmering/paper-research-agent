@@ -68,8 +68,10 @@ class StreamingScriptLLM:
 
     def __init__(self, script):
         self.script = list(script)
+        self.calls = []
 
     def chat_with_tools(self, system, messages, tools, on_delta=None):
+        self.calls.append([dict(message) for message in messages])
         item = self.script.pop(0)
         for piece in item.get("deltas", []):
             if on_delta is not None:

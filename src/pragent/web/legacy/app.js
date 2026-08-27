@@ -479,12 +479,23 @@ function agentSessionId() {
   return id;
 }
 
-function newAgentSession() {
+async function newAgentSession() {
+  if (agentBusy) return;
+  const currentId = sessionStorage.getItem("pra-agent-session");
+  if (currentId) {
+    try {
+      await api("/api/agent/sessions/" + encodeURIComponent(currentId), { method: "DELETE" });
+    } catch (err) {
+      agentStatus("无法清空当前会话：" + err.message, true);
+      return;
+    }
+  }
   sessionStorage.removeItem("pra-agent-session");
   clear($("#agent-flow"));
   hide($("#agent-pending"));
   clear($("#agent-pending"));
   $("#agent-q").value = "";
+  agentStatus("已开始新会话");
 }
 
 function agentScroll() {

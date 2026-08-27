@@ -16,28 +16,34 @@
    - 对模型返回稳定、脱敏的 `tool_execution_failed`。
    - 本地日志记录 `session_id/run_id/tool_name/error_type`。
    - 增加异常路径测试；该提交后完整测试为 `325 passed`。
+3. `feat: persist closed web agent transcripts`（本提交）
+   - Store transcript 完成 JSON 无损往返、A/B 隔离、重启恢复、原子替换、删除级联与非法输入测试。
+   - `_SessionRegistry` 首次创建热会话时加载已持久化消息；正常、确认和取消后的闭合协议会保存。
+   - 修复 Web 用户问题只进入 run objective、没有进入模型 messages 的回归。
+   - 新增幂等 `DELETE /api/agent/sessions/{session_id}`；运行中或等待确认时返回 `409`。
+   - 新会话按钮先安全清空服务端 transcript，再更换浏览器 session ID。
+   - 新增 `lxml-html-clean` 直接依赖；无 Windows symlink 权限时只跳过对应安全测试。
+   - Windows 验证：`338 passed, 1 skipped`、临时目录 75 MB、Phase 3 offline smoke、`pip check`、Python compileall、`node --check`、wheel build/check 全部通过。
 
-## 当前 WIP
+## 当前状态
 
-`src/pragent/store.py` 已开始增加以下 transcript 存储方法：
+Web Agent 的闭合 transcript 现在可以跨进程恢复：
 
 - `load_agent_messages(session_id)`；
 - `save_agent_messages(session_id, messages)`；
 - `delete_agent_session(session_id)`。
 
-这部分只完成了 Store 草稿，尚未接入 Web Agent，也没有针对新增方法的测试。它必须继续按 WIP 对待，不能在简历或 README 中宣称“会话已持久化”。
+`agent_messages.content` 保存整条 OpenAI-compatible message JSON，以保留 assistant `tool_calls` 和 tool `tool_call_id`。只持久化已闭合的完整回合；等待确认的未决 tool 协议不会覆盖上一个持久边界。详细概念对照见 [Web Agent 会话记忆边界](session-memory.md)。
 
-设计约束：`agent_messages.content` 暂时保存整条 OpenAI-compatible message JSON，以保留 assistant `tool_calls` 和 tool `tool_call_id`。只持久化已闭合的完整回合；等待确认的未决 tool 协议不能作为可恢复上下文写入。
+仍未完成的产品化范围：页面刷新后重绘历史卡片、session 绑定 project，以及把冻结 pending action 跨重启恢复。这些属于产品路线 Step 25 的剩余部分，不能因 transcript 已完成而一并宣称完成。
 
-## 下一台电脑的继续顺序
+## 下一阶段：评测脚手架
 
-1. 为三个 Store 方法补测试：JSON 无损往返、A/B 会话隔离、第二个 Store 实例重启恢复、原子替换、删除级联、非法 role/session ID。
-2. 在 `_SessionRegistry.get()` 创建内存会话时加载已持久化消息。
-3. 在正常回合和确认/取消完成后保存消息；存在 `pending_action` 时不保存未闭合回合。
-4. 增加幂等清空会话接口；运行中或等待确认时返回 `409`，不能留下仍可执行的孤立 ticket。
-5. 增加 Web 测试：会话 A/B 隔离、创建新 app 后恢复、清空后不恢复、同 session 并发拒绝。
-6. 补充 history、模型上下文、持久 transcript 和 LangChain4j `ChatMemoryStore` 的对照说明。
-7. 完成会话提交后再进入评测脚手架：30 个问题、BM25/vector/RRF、Recall@5/MRR、引用和延迟指标。
+1. 先把本阶段作为一个独立提交，确认工作树干净。
+2. 建立 30 个可审计问题的数据格式，固定 query、相关文档/分块和人工证据标签。
+3. 同一快照分别运行 BM25、vector 与 RRF，输出 Recall@5、MRR、延迟和失败明细。
+4. 增加引用合法率；人工证据支持率保持人工复核，不用字符串匹配冒充语义蕴含。
+5. 用评测结果驱动一次可解释的检索调整，独立提交调整前后指标和 paired query delta。
 
 ## 在新电脑恢复
 
@@ -56,5 +62,5 @@ python3.11 -m venv .venv
 
 - 远程工作分支：`origin/codex/ownership-plan`。
 - 本分支尚未合并 `master`。
-- 会话持久化 WIP 完成测试前，不要开面向成品的 PR。
+- 会话 transcript 阶段必须先独立提交，再开始评测脚手架。
 - 后续每个阶段保持独立提交：会话持久化、评测脚手架、评测驱动检索调整。

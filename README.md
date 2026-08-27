@@ -9,6 +9,7 @@
 - 问答：OpenAI 兼容 API（DeepSeek / OpenAI / 通义等），未配置 key 时退回纯检索；CLI、TUI 与 Web 均支持流式输出；回答“库里有哪些论文”类问题时以注入的论文库目录为权威来源（正文中的参考文献不算库藏）
 - 受控 Agent：显式 run 状态、调用预算、工具效果分类、写入/联网确认与可恢复执行
 - Web 端 Agent：SSE 流式对话、实时工具调用卡片、可视化确认票据、证据高亮与 run 审计侧栏
+- Web 会话恢复：已闭合的 OpenAI-compatible transcript 跨服务重启恢复；等待确认的未决动作不持久化，也不会在重启后自动执行
 - 持久研究项目：创建 project、编辑/排序研究问题、从现有本地论文库选择来源，刷新或重启后恢复
 - 多来源发现：arXiv、Semantic Scholar、Crossref 聚合检索与 deterministic dedupe；普通网页经 SSRF-safe fetch 保存可追溯 snapshot
 - 统一全文：下载 PDF 与网页抽取正文共用 chunk/embed/hybrid-search/evidence 管线

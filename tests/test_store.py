@@ -291,6 +291,109 @@ def test_meta_and_stats(tmp_path):
     s.close()
 
 
+def test_agent_messages_roundtrip_isolated_and_restore_across_store_instances(tmp_path):
+    db_path = tmp_path / "t.db"
+    messages = [
+        {"role": "user", "content": "检查论文库"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "library_status", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "共 3 篇"},
+        {"role": "assistant", "content": "库里有 3 篇论文。"},
+    ]
+    first = Store(db_path)
+    first.save_agent_messages("session-a", messages)
+    first.save_agent_messages("session-b", [{"role": "user", "content": "B"}])
+    assert first.load_agent_messages("session-a") == messages
+    first.close()
+
+    restarted = Store(db_path)
+    assert restarted.load_agent_messages("session-a") == messages
+    assert restarted.load_agent_messages("session-b") == [
+        {"role": "user", "content": "B"}
+    ]
+    assert restarted.load_agent_messages("unknown") == []
+    restarted.close()
+
+
+def test_agent_messages_atomic_replace_rolls_back_on_insert_failure(tmp_path):
+    s = Store(tmp_path / "t.db")
+    original = [{"role": "user", "content": "保留我"}]
+    s.save_agent_messages("session-a", original)
+    s._conn.execute(
+        """
+        CREATE TRIGGER reject_agent_message
+        BEFORE INSERT ON agent_messages
+        WHEN NEW.content LIKE '%force-rollback%'
+        BEGIN
+            SELECT RAISE(ABORT, 'forced transcript failure');
+        END
+        """
+    )
+    s._conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced transcript failure"):
+        s.save_agent_messages(
+            "session-a", [{"role": "assistant", "content": "force-rollback"}]
+        )
+
+    assert s.load_agent_messages("session-a") == original
+    s.close()
+
+
+def test_delete_agent_session_is_idempotent_and_cascades_messages(tmp_path):
+    s = Store(tmp_path / "t.db")
+    s.save_agent_messages("session-a", [{"role": "user", "content": "A"}])
+
+    assert s.delete_agent_session("session-a") is True
+    assert s.delete_agent_session("session-a") is False
+    assert s.load_agent_messages("session-a") == []
+    assert s._conn.execute(
+        "SELECT COUNT(*) FROM agent_messages WHERE session_id='session-a'"
+    ).fetchone()[0] == 0
+    s.close()
+
+
+@pytest.mark.parametrize("session_id", ["", "   ", "x" * 129])
+def test_agent_messages_reject_invalid_session_id(tmp_path, session_id):
+    s = Store(tmp_path / "t.db")
+    with pytest.raises(ValueError, match="session_id"):
+        s.save_agent_messages(session_id, [])
+    with pytest.raises(ValueError, match="session_id"):
+        s.load_agent_messages(session_id)
+    with pytest.raises(ValueError, match="session_id"):
+        s.delete_agent_session(session_id)
+    s.close()
+
+
+@pytest.mark.parametrize(
+    "messages, expected",
+    [
+        (["not-a-dict"], "必须是字典"),
+        ([{"role": "developer", "content": "x"}], "role 不合法"),
+        ([{"role": "user", "content": {1, 2}}], "JSON 序列化"),
+    ],
+)
+def test_agent_messages_reject_invalid_messages_without_overwriting(
+    tmp_path, messages, expected
+):
+    s = Store(tmp_path / "t.db")
+    original = [{"role": "user", "content": "原内容"}]
+    s.save_agent_messages("session-a", original)
+    with pytest.raises(ValueError, match=expected):
+        s.save_agent_messages("session-a", messages)
+    assert s.load_agent_messages("session-a") == original
+    s.close()
+
+
 def test_iter_papers(tmp_path):
     s = Store(tmp_path / "t.db")
     s.upsert_paper(make_paper("a.pdf"))

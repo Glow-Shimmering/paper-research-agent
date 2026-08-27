@@ -1,4 +1,7 @@
 """Web Agent：SSE 受控对话、确认/取消与 run 审计端点。"""
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
@@ -81,6 +84,18 @@ def test_agent_chat_streams_tool_and_answer(tmp_path):
     assert len(runs) == 1
     assert runs[0].status == "succeeded"
     assert runs[0].objective == "库里有什么？"
+    assert llm.calls[0][-1] == {"role": "user", "content": "库里有什么？"}
+    restored = store.load_agent_messages("s1")
+    assert [message["role"] for message in restored] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert restored[0]["content"] == "库里有什么？"
+    assert restored[1]["tool_calls"][0]["id"] == "c1"
+    assert restored[2]["tool_call_id"] == "c1"
+    assert restored[3]["content"] == "库里有 1 篇论文。"
 
 
 def test_agent_confirmation_and_resume(tmp_path, fake_write):
@@ -101,6 +116,7 @@ def test_agent_confirmation_and_resume(tmp_path, fake_write):
     assert "fake_write" in r1.text
     assert '"status": "awaiting_confirmation"' in r1.text
     assert _EXECUTED == []  # 未确认前不执行
+    assert store.load_agent_messages("s2") == []
 
     r2 = client.post("/api/agent/confirm", json={"session_id": "s2", "confirm": True})
     assert r2.status_code == 200
@@ -109,6 +125,14 @@ def test_agent_confirmation_and_resume(tmp_path, fake_write):
     assert '"status": "succeeded"' in r2.text
     assert _EXECUTED == ["hello"]
     assert store.list_agent_runs()[0].status == "succeeded"
+    restored = store.load_agent_messages("s2")
+    assert [message["role"] for message in restored] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert restored[2]["tool_call_id"] == "c2"
 
 
 def test_agent_cancel_flow(tmp_path, fake_write):
@@ -130,6 +154,9 @@ def test_agent_cancel_flow(tmp_path, fake_write):
     assert '"status": "cancelled"' in r2.text
     assert _EXECUTED == []
     assert store.list_agent_runs()[0].status == "cancelled"
+    restored = store.load_agent_messages("s3")
+    assert [message["role"] for message in restored] == ["user", "assistant", "tool"]
+    assert restored[-1]["tool_call_id"] == "c3"
 
 
 def test_agent_runs_and_events_audit(tmp_path):
@@ -196,3 +223,135 @@ def test_agent_chat_rejects_new_turn_while_pending(tmp_path, fake_write):
 
     r2 = client.post("/api/agent/chat", json={"session_id": "s7", "question": "再问一个"})
     assert r2.status_code == 409
+
+
+def test_agent_session_restores_after_new_app_and_keeps_sessions_isolated(tmp_path):
+    db_path = tmp_path / "t.db"
+    first_store = Store(db_path)
+    first_llm = StreamingScriptLLM(
+        [
+            {"content": "A 的首轮", "tool_calls": []},
+            {"content": "B 的首轮", "tool_calls": []},
+        ]
+    )
+    first_client = TestClient(
+        create_app(store=first_store, embedder=FakeEmbedder(), llm=first_llm)
+    )
+    assert first_client.post(
+        "/api/agent/chat", json={"session_id": "A", "question": "问题 A1"}
+    ).status_code == 200
+    assert first_client.post(
+        "/api/agent/chat", json={"session_id": "B", "question": "问题 B1"}
+    ).status_code == 200
+
+    restarted_store = Store(db_path)
+    restarted_llm = StreamingScriptLLM(
+        [
+            {"content": "A 的续答", "tool_calls": []},
+            {"content": "B 的续答", "tool_calls": []},
+        ]
+    )
+    restarted_client = TestClient(
+        create_app(
+            store=restarted_store,
+            embedder=FakeEmbedder(),
+            llm=restarted_llm,
+        )
+    )
+    assert restarted_client.post(
+        "/api/agent/chat", json={"session_id": "A", "question": "问题 A2"}
+    ).status_code == 200
+    assert restarted_client.post(
+        "/api/agent/chat", json={"session_id": "B", "question": "问题 B2"}
+    ).status_code == 200
+
+    assert [message.get("content") for message in restarted_llm.calls[0]] == [
+        "问题 A1",
+        "A 的首轮",
+        "问题 A2",
+    ]
+    assert [message.get("content") for message in restarted_llm.calls[1]] == [
+        "问题 B1",
+        "B 的首轮",
+        "问题 B2",
+    ]
+    first_store.close()
+    restarted_store.close()
+
+
+def test_agent_clear_session_is_idempotent_and_prevents_restore(tmp_path):
+    store = Store(tmp_path / "t.db")
+    llm = StreamingScriptLLM(
+        [
+            {"content": "旧回答", "tool_calls": []},
+            {"content": "新回答", "tool_calls": []},
+        ]
+    )
+    client = TestClient(create_app(store=store, embedder=FakeEmbedder(), llm=llm))
+    client.post("/api/agent/chat", json={"session_id": "clear-me", "question": "旧问题"})
+
+    cleared = client.delete("/api/agent/sessions/clear-me")
+    assert cleared.status_code == 200
+    assert cleared.json()["cleared"] is True
+    repeated = client.delete("/api/agent/sessions/clear-me")
+    assert repeated.status_code == 200
+    assert repeated.json()["cleared"] is False
+
+    client.post("/api/agent/chat", json={"session_id": "clear-me", "question": "新问题"})
+    assert [message.get("content") for message in llm.calls[-1]] == ["新问题"]
+
+
+def test_agent_clear_rejects_pending_session(tmp_path, fake_write):
+    llm = StreamingScriptLLM(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "pending-clear", "name": "fake_write", "arguments": {"text": "x"}}
+                ],
+            }
+        ]
+    )
+    _, client = _app(tmp_path, llm)
+    client.post("/api/agent/chat", json={"session_id": "pending", "question": "写入"})
+
+    response = client.delete("/api/agent/sessions/pending")
+    assert response.status_code == 409
+    assert "待确认" in response.json()["detail"]
+
+
+def test_agent_rejects_concurrent_turn_and_clear_for_same_session(tmp_path, monkeypatch):
+    import pragent.agent_api as agent_api
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_run_turn(session, emit, *, objective=None):
+        started.set()
+        release.wait(timeout=5)
+        emit(None)
+
+    monkeypatch.setattr(agent_api, "_run_turn", blocking_run_turn)
+    app = create_app(
+        store=Store(tmp_path / "t.db"),
+        embedder=FakeEmbedder(),
+        llm=StreamingScriptLLM([]),
+    )
+    first_client = TestClient(app)
+    second_client = TestClient(app)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(
+            first_client.post,
+            "/api/agent/chat",
+            json={"session_id": "busy", "question": "第一问"},
+        )
+        assert started.wait(timeout=2)
+        concurrent = second_client.post(
+            "/api/agent/chat", json={"session_id": "busy", "question": "第二问"}
+        )
+        clearing = second_client.delete("/api/agent/sessions/busy")
+        release.set()
+        assert first.result(timeout=5).status_code == 200
+
+    assert concurrent.status_code == 409
+    assert clearing.status_code == 409

@@ -15,14 +15,14 @@ Agent 部分只增加一条受控工具链：
 
 ## 当前可信基线
 
-- 基线日期：2026-08-26。
-- 环境：macOS arm64、CPython 3.11.15、`requirements-dev.lock`。
-- 完整离线测试：`324 passed`；第三方依赖弃用警告的数量可能随缓存和解释器补丁版本变化。
+- 基线日期：2026-08-27。
+- 环境：macOS arm64 / Windows 11、CPython 3.11、`requirements-dev.lock`。
+- 最新 Windows 完整离线测试：`338 passed, 1 skipped`；跳过项是当前普通账户没有创建符号链接权限时无法执行的导入安全测试。
 - 样本库：仓库根目录的 3 篇推荐系统论文，共索引 259 个分块。
 - 已验证命令：`status`、`index`、`list`、`search`、`ask --no-llm`。
 - 未验证：真实 LLM 的 `ask` 与 `chat`。它们必须使用本人配置的 OpenAI-compatible provider 单独做 live smoke，不能由脚本化测试替代。
 
-详细复现步骤见 [第 1 周运行基线](week-01-baseline.md)，核心调用关系见 [核心链路图](core-flow.md)。跨电脑继续开发时先读[接力说明](handoff.md)。
+详细复现步骤见 [第 1 周运行基线](week-01-baseline.md)，核心调用关系见 [核心链路图](core-flow.md)，会话概念边界见[会话记忆说明](session-memory.md)。跨电脑继续开发时先读[接力说明](handoff.md)。
 
 ## 阅读顺序与所有权边界
 

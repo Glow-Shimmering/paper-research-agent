@@ -13,8 +13,9 @@
 - ``{"type": "run", "run_id": ...}``
 - ``{"type": "complete", "status": ..., "error": ...}``（终态或等待确认）
 
-会话为进程内内存态（上限 64 个，最久未使用先淘汰）；刷新页面或重启
-服务会丢失消息历史，但 run 与事件仍可通过审计侧栏查询。
+会话的闭合 transcript 由 Store 持久化，进程内仅保留最多 64 个热会话。
+等待确认的未闭合 tool 协议不会写入可恢复 transcript；run 与事件仍可
+通过审计侧栏查询。
 """
 import asyncio
 import json
@@ -38,9 +39,9 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 class WebAgentSession:
-    def __init__(self, session_id: str, store, embedder, llm):
+    def __init__(self, session_id: str, store, embedder, llm, *, messages=None):
         self.id = session_id
-        self.messages: list[dict] = []
+        self.messages: list[dict] = list(messages or [])
         self.ctx = ToolContext(
             store=store,
             embedder=embedder,
@@ -82,7 +83,13 @@ class _SessionRegistry:
             session = self._sessions.get(session_id)
             if session is None:
                 embedder, llm = self._dependencies()
-                session = WebAgentSession(session_id, self.store, embedder, llm)
+                session = WebAgentSession(
+                    session_id,
+                    self.store,
+                    embedder,
+                    llm,
+                    messages=self.store.load_agent_messages(session_id),
+                )
                 self._sessions[session_id] = session
                 while len(self._sessions) > _SESSION_CAP:
                     self._sessions.popitem(last=False)
@@ -94,6 +101,19 @@ class _SessionRegistry:
     def find(self, session_id: str) -> Optional[WebAgentSession]:
         with self._lock:
             return self._sessions.get(session_id)
+
+    def discard(
+        self,
+        session_id: str,
+        *,
+        expected: Optional[WebAgentSession] = None,
+    ) -> None:
+        """移除指定热会话；expected 防止误删并发创建的新实例。"""
+
+        with self._lock:
+            current = self._sessions.get(session_id)
+            if current is not None and (expected is None or current is expected):
+                self._sessions.pop(session_id, None)
 
 
 def _event_json(event: dict) -> str:
@@ -187,6 +207,28 @@ def _finalize_turn(
     emit(None)
 
 
+def _persist_closed_transcript(
+    session: WebAgentSession,
+    emit: Callable[[Optional[dict]], None],
+) -> bool:
+    """仅保存没有未决 tool call 的 transcript，并把持久化故障显式呈现。"""
+
+    if getattr(session.ctx, "pending_action", None) is not None:
+        return False
+    try:
+        session.ctx.store.save_agent_messages(session.id, session.messages)
+    except Exception:
+        emit(
+            {
+                "type": "error",
+                "message": "本轮已完成，但会话历史保存失败；服务重启后可能无法恢复。",
+                "code": "transcript_save_failed",
+            }
+        )
+        return False
+    return True
+
+
 def _run_turn(
     session: WebAgentSession,
     emit: Callable[[Optional[dict]], None],
@@ -196,8 +238,12 @@ def _run_turn(
     """在独立线程执行一轮受控对话，事件经 emit 压入 SSE 队列。"""
     create_run = objective is not None
     resume_run_id = None if create_run else session.run_id
+    previous_messages = list(session.messages)
 
     def worker() -> None:
+        if objective is not None:
+            # objective 用于 run 审计；用户问题仍必须进入模型消息上下文。
+            session.messages.append({"role": "user", "content": objective})
         try:
             new_messages, logs = chat_turn(
                 session.ctx.llm,
@@ -212,10 +258,14 @@ def _run_turn(
                 on_log=lambda entry: _emit_log(entry, emit),
             )
         except Exception as exc:
+            # 普通新回合失败时恢复到上一个已持久化边界，避免下次请求看到
+            # 半截 user turn。确认续跑由调用方负责保留已执行的 tool result。
+            session.messages = previous_messages
             emit({"type": "error", "message": f"Agent 调用失败：{exc}"})
             emit(None)
             return
         session.messages = new_messages
+        _persist_closed_transcript(session, emit)
         _finalize_turn(session, logs, emit)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -354,14 +404,45 @@ def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> 
                         )
                     session.messages = new_messages
                 except Exception as exc:
+                    # 确认可能已经执行了有副作用的工具。若协议已经闭合，必须
+                    # 保存 tool result，避免重启后把已执行动作伪装成从未发生。
+                    _persist_closed_transcript(session, emit)
                     emit({"type": "error", "message": f"确认操作失败：{exc}"})
                     emit(None)
                     return
+                _persist_closed_transcript(session, emit)
                 _finalize_turn(session, logs, emit)
 
             threading.Thread(target=worker, daemon=True).start()
 
         return _sse_endpoint(session, aq, emit, start_worker=start_worker)
+
+    @app.delete("/api/agent/sessions/{session_id}")
+    def api_agent_clear_session(session_id: str):
+        normalized_id = str(session_id or "").strip()
+        if not normalized_id:
+            raise HTTPException(status_code=400, detail="session_id 不能为空")
+        if len(normalized_id) > _MAX_SESSION_ID_CHARS:
+            raise HTTPException(status_code=400, detail="session_id 过长")
+
+        session = registry.find(normalized_id)
+        if session is None:
+            return {
+                "session_id": normalized_id,
+                "cleared": registry.store.delete_agent_session(normalized_id),
+            }
+        if not session.lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="该会话正在处理中，不能清空")
+        try:
+            if getattr(session.ctx, "pending_action", None) is not None:
+                raise HTTPException(status_code=409, detail="会话有待确认操作，不能清空")
+            cleared = registry.store.delete_agent_session(normalized_id)
+            session.messages = []
+            session.run_id = None
+            registry.discard(normalized_id, expected=session)
+        finally:
+            session.lock.release()
+        return {"session_id": normalized_id, "cleared": cleared}
 
     @app.get("/api/agent/runs")
     def api_agent_runs(

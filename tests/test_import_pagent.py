@@ -275,13 +275,18 @@ def test_import_rejects_future_schema_missing_files_and_symlinks(tmp_path):
     with pytest.raises(ImportPagentError, match="不存在"):
         plan_import_pagent(missing, tmp_path / "missing-target")
 
-    if hasattr(Path, "symlink_to"):
-        unsafe = tmp_path / "unsafe"
-        connection, _ = _create_legacy_source(unsafe)
-        connection.close()
+def test_import_rejects_symlinks_when_supported(tmp_path):
+    unsafe = tmp_path / "unsafe"
+    connection, _ = _create_legacy_source(unsafe)
+    connection.close()
+    try:
         (unsafe / "linked-note").symlink_to(unsafe / "notes" / "reading.md")
-        with pytest.raises(ImportPagentError, match="符号链接"):
-            plan_import_pagent(unsafe, tmp_path / "unsafe-target")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("当前 Windows 账户没有创建符号链接的权限")
+        raise
+    with pytest.raises(ImportPagentError, match="符号链接"):
+        plan_import_pagent(unsafe, tmp_path / "unsafe-target")
 
 
 def test_import_uses_online_backup_and_includes_committed_wal_rows(tmp_path):

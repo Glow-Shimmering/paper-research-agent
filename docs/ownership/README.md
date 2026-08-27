@@ -22,7 +22,7 @@ Agent 部分只增加一条受控工具链：
 - 已验证命令：`status`、`index`、`list`、`search`、`ask --no-llm`。
 - 未验证：真实 LLM 的 `ask` 与 `chat`。它们必须使用本人配置的 OpenAI-compatible provider 单独做 live smoke，不能由脚本化测试替代。
 
-详细复现步骤见 [第 1 周运行基线](week-01-baseline.md)，核心调用关系见 [核心链路图](core-flow.md)。
+详细复现步骤见 [第 1 周运行基线](week-01-baseline.md)，核心调用关系见 [核心链路图](core-flow.md)。跨电脑继续开发时先读[接力说明](handoff.md)。
 
 ## 阅读顺序与所有权边界
 

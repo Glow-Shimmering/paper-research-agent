@@ -34,6 +34,8 @@ _AGENT_RUN_STATUSES = frozenset(
         "blocked",
     }
 )
+_AGENT_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
+_MAX_AGENT_SESSION_ID_CHARS = 128
 
 
 class RevisionConflictError(RuntimeError):
@@ -865,6 +867,114 @@ class Store:
             ).fetchall()
         return [self._agent_run_from_row(row) for row in rows]
 
+    # ---------- agent sessions / transcript ----------
+
+    def load_agent_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """读取一个已完成 Web 会话的完整模型消息。
+
+        ``agent_messages.content`` 保存整条 OpenAI-compatible 消息的 JSON，
+        因而 assistant ``tool_calls`` 和 tool ``tool_call_id`` 可无损恢复。
+        对早期仅保存纯文本的记录保留兼容读取路径。
+        """
+
+        normalized_id = self._validate_agent_session_id(session_id)
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT role, content FROM agent_messages
+                   WHERE session_id=? ORDER BY seq""",
+                (normalized_id,),
+            ).fetchall()
+        messages: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                decoded = json.loads(row["content"])
+            except (TypeError, json.JSONDecodeError):
+                decoded = None
+            if isinstance(decoded, dict) and decoded.get("role") == row["role"]:
+                messages.append(decoded)
+            else:
+                messages.append({"role": row["role"], "content": row["content"]})
+        return messages
+
+    def save_agent_messages(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        """原子替换一个已完成会话的 transcript。
+
+        Web 层只在没有待确认动作时调用本方法，避免把未闭合的
+        assistant/tool 协议对作为可恢复上下文。
+        """
+
+        normalized_id = self._validate_agent_session_id(session_id)
+        serialized: list[tuple[str, str]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                raise ValueError("Agent message 必须是字典")
+            role = str(message.get("role") or "")
+            if role not in _AGENT_MESSAGE_ROLES:
+                raise ValueError(f"Agent message role 不合法：{role!r}")
+            try:
+                content = json.dumps(
+                    message,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Agent message 必须可 JSON 序列化") from exc
+            serialized.append((role, content))
+
+        timestamp = now_iso()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """INSERT INTO agent_sessions
+                           (id, project_id, title, status, version, created_at, updated_at)
+                       VALUES (?, NULL, '', 'active', 1, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           status='active',
+                           version=agent_sessions.version + 1,
+                           updated_at=excluded.updated_at""",
+                    (normalized_id, timestamp, timestamp),
+                )
+                self._conn.execute(
+                    "DELETE FROM agent_messages WHERE session_id=?",
+                    (normalized_id,),
+                )
+                self._conn.executemany(
+                    """INSERT INTO agent_messages
+                           (id, session_id, seq, role, content, run_id, created_at)
+                       VALUES (?, ?, ?, ?, ?, NULL, ?)""",
+                    [
+                        (
+                            f"msg_{uuid.uuid4().hex}",
+                            normalized_id,
+                            seq,
+                            role,
+                            content,
+                            timestamp,
+                        )
+                        for seq, (role, content) in enumerate(serialized, start=1)
+                    ],
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def delete_agent_session(self, session_id: str) -> bool:
+        """删除会话及其级联 transcript；不存在时幂等返回 ``False``。"""
+
+        normalized_id = self._validate_agent_session_id(session_id)
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM agent_sessions WHERE id=?",
+                (normalized_id,),
+            )
+        return bool(cursor.rowcount)
+
     # ---------- meta / stats ----------
 
     def meta_get(self, key: str) -> Optional[str]:
@@ -1061,6 +1171,17 @@ class Store:
         if callable(to_dict):
             value = to_dict()
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _validate_agent_session_id(session_id: str) -> str:
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            raise ValueError("session_id 不能为空")
+        if len(normalized) > _MAX_AGENT_SESSION_ID_CHARS:
+            raise ValueError(
+                f"session_id 不能超过 {_MAX_AGENT_SESSION_ID_CHARS} 个字符"
+            )
+        return normalized
 
     @staticmethod
     def _json_load_optional(value: Optional[str]) -> Any:

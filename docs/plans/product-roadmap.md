@@ -3,6 +3,19 @@
 > **范围纠正：上一版 Java v0.2 计划是误批准，不执行。**  
 > `pagent-java/` 保持当前状态，专门用于用户尚未开始的“14 天 × 4 小时”学习路线；本计划改为从 Python `paper-agent/` 派生一个独立产品目录，面向用户真实论文写作与调研工作流。
 
+## 执行规则与唯一事实源
+
+本文是产品实施状态、下一项工作和验收 Gate 的唯一事实源，不再维护独立的接力文档：
+
+1. 默认从最早的未完成 Step 开始，只有存在依赖关系或明确缺少外部授权时才跳转；
+2. 每个 Step 必须在实现、针对性测试、完整回归和对应 Gate 证据齐备后才能勾选；部分完成写在该 Step 下，不提前标记完成；
+3. 数据库、Web/API、评测、导出等不同风险边界保持独立提交，暂存时显式列出文件；
+4. 每次 pytest 后立即运行 `scripts/check_tmp_space.py`；阶段结束同时更新本文、相关架构/工作流文档和精确验证结果；
+5. Git 提交历史记录已完成改动，本文记录当前事实与剩余范围，不复制逐提交日志；
+6. 默认只创建本地提交。推送、合并、发布、真实 provider/LLM 调用和需要密钥的验收仍需用户明确授权。
+
+恢复工作时先检查当前分支、工作树和本文 Steps；无需根据旧会话或聊天侧栏猜测进度。
+
 ## Context
 
 用户希望的不是立即强化学习仓库，而是：
@@ -276,7 +289,10 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 ### Phase 5 — 跨论文比较与综述
 
-- [ ] Step 17：实现 project-scoped comparison workflow，限制 2–20 个已选来源，复用精读卡并支持自定义维度。
+- [x] Step 17：实现 project-scoped comparison workflow，限制 2–20 个已选来源，复用精读卡并支持自定义维度。
+  - 证据：默认九维直接复用当前精读卡；自定义维度按维度执行有界、可审计 LLM 调用，只能引用该来源精读卡已有 evidence/quote。
+  - 保存：project fingerprint、2–20 来源 membership、evidence 当前性、声明来源与精确 quote 在同一事务重新验证；比较任务已接入持久 worker。
+  - 验证：`tests/test_compare.py` 9 个合同测试；Windows 完整回归 `354 passed, 1 skipped`，临时目录 79 MB，offline smoke、`pip check`、compileall、`node --check`、wheel build/check 通过。
 - [ ] Step 18：实现比较矩阵 UI/编辑/version；每个 cell 保存 evidence 或明确 `insufficient_evidence`。
 - [ ] Step 19：实现 review outline workflow，基于研究问题、选择来源和比较结果规划章节。
 - [ ] Step 20：实现 section draft workflow 与编辑/version；claim 使用结构化 source/evidence tokens，生成后做 citation scope/freshness 校验。
@@ -295,6 +311,8 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 ### Phase 7 — Agent、Web 正确性与产品收尾
 
 - [ ] Step 25：将 Agent session/transcript/pending confirmation 持久化并绑定 project；增加 project source/artifact/evidence read tools，写入和联网保持确认。
+  - 已完成：闭合 transcript 的 SQLite 保存、按 session 重启恢复、幂等清空，以及正常/确认/取消闭合回合持久化。
+  - 未完成：页面刷新后重绘历史卡片、session 绑定 project、pending confirmation 冻结参数跨重启恢复，以及 project-scoped read tools；因此 Step 25 仍保持未勾选。
 - [ ] Step 26：修复 SSE disconnect session race，接入 cancel event；实现 deadline-aware tool handlers，补齐 timeout/idempotency 合同。
 - [ ] Step 27：完成 Dashboard、Evidence & Notes、job center、空状态、错误提示、中文帮助和响应式样式；HTMX/JS 全部随 wheel 本地打包。
 - [ ] Step 28：增加 deterministic product scenarios、live DeepSeek/manual provider smoke、质量 rubric、隐私/安全审查和数据备份恢复演练。

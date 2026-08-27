@@ -7,6 +7,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEEP_READ_SCHEMA_VERSION = 1
+COMPARISON_SCHEMA_VERSION = 1
 DEEP_READ_FIELD_ORDER = (
     "research_question",
     "related_work",
@@ -77,3 +78,84 @@ class DeepReadCard(BaseModel):
 
     def ordered_fields(self) -> tuple[tuple[str, DeepReadField], ...]:
         return tuple((name, getattr(self, name)) for name in self.field_order)
+
+
+class ComparisonDimension(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    key: str = Field(min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    source_field: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source_field(self) -> "ComparisonDimension":
+        if self.source_field is not None and self.source_field not in DEEP_READ_FIELD_ORDER:
+            raise ValueError("source_field 必须是精读卡固定字段")
+        return self
+
+
+class ComparisonCell(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_id: str = Field(min_length=1, max_length=96)
+    dimension_key: str = Field(
+        min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    summary: str = Field(default="", max_length=12000)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
+    insufficient_evidence: bool = False
+
+    @model_validator(mode="after")
+    def validate_support_state(self) -> "ComparisonCell":
+        if self.insufficient_evidence:
+            if self.evidence_refs:
+                raise ValueError("证据不足 cell 不能同时声明 evidence_refs")
+            return self
+        if not self.summary:
+            raise ValueError("有证据的 comparison cell 必须包含 summary")
+        if not self.evidence_refs:
+            raise ValueError("有证据的 comparison cell 必须包含 evidence_refs")
+        identities = [item.evidence_id for item in self.evidence_refs]
+        if len(identities) != len(set(identities)):
+            raise ValueError("同一 comparison cell 不能重复引用 evidence")
+        return self
+
+
+class ComparisonDimensionCells(BaseModel):
+    """自定义维度的单次 LLM 输出合同。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dimension_key: str = Field(
+        min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    cells: list[ComparisonCell] = Field(min_length=2, max_length=20)
+
+
+class ComparisonMatrix(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    source_ids: list[str] = Field(min_length=2, max_length=20)
+    dimensions: list[ComparisonDimension] = Field(min_length=1, max_length=40)
+    cells: list[ComparisonCell] = Field(min_length=2, max_length=800)
+
+    @model_validator(mode="after")
+    def validate_matrix_shape(self) -> "ComparisonMatrix":
+        if len(self.source_ids) != len(set(self.source_ids)):
+            raise ValueError("comparison source_ids 不能重复")
+        dimension_keys = [item.key for item in self.dimensions]
+        if len(dimension_keys) != len(set(dimension_keys)):
+            raise ValueError("comparison dimension key 不能重复")
+        pairs = [(cell.source_id, cell.dimension_key) for cell in self.cells]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("comparison cell 不能重复")
+        expected = {
+            (source_id, dimension_key)
+            for source_id in self.source_ids
+            for dimension_key in dimension_keys
+        }
+        if set(pairs) != expected:
+            raise ValueError("comparison cells 必须完整覆盖 source × dimension")
+        return self

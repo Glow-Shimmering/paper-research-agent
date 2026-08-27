@@ -64,6 +64,8 @@ erDiagram
 
 Deep Read 的模型 revision 使用更严格的原子保存入口：在同一个 `BEGIN IMMEDIATE` 中重新计算并核对生成开始时的 fingerprint，验证 evidence 属于 artifact 当前 indexed source、当前 chunk/hash 未过期、field path 属于固定九栏且 quote 是 evidence snapshot 的精确子串，然后一起提交 revision、全部 evidence links、artifact current pointer 以及 model/usage/finish reason/prompt/schema metadata。任一 forged ID、quote、跨来源 evidence 或生成期间 source 变化都会整体回滚。
 
+Project-level `comparison` artifact 同样使用专用原子保存入口。其 content 固定所选 2–20 个 project source、比较维度和完整 cell 矩阵；保存时验证项目 fingerprint、全部 source membership/index 状态，以及每条 cell evidence 是否属于声明来源且仍与当前 chunk/hash/quote 一致。content 中的 evidence refs 必须与待写入 `artifact_evidence` links 完全一致，防止通过省略 link 保存表面有引用但不可审计的矩阵。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

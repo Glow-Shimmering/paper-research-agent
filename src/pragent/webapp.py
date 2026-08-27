@@ -19,7 +19,13 @@ from .indexer import index_library
 from .ingestion import FetchPolicy, SafeFetcher, SnapshotStore, WebIngestService
 from .jobs import JobQueue, WorkerPool
 from .llm import LLMClient, LLMError
-from .research import DeepReadArtifactService, DeepReadWorkflow
+from .research import (
+    ComparisonArtifactService,
+    ComparisonDimension,
+    ComparisonWorkflow,
+    DeepReadArtifactService,
+    DeepReadWorkflow,
+)
 from .search import hybrid_search
 from .security import (
     api_key_matches,
@@ -240,7 +246,38 @@ def create_app(
                 "revision_id": saved.revision.id,
             }
 
+        def comparison_handler(context, payload):
+            custom_dimensions = [
+                ComparisonDimension.model_validate(item)
+                for item in payload.get("custom_dimensions", [])
+            ]
+            total = max(1, len(custom_dimensions))
+            context.report_progress(0, total)
+            workflow = ComparisonWorkflow(
+                _research_repository(),
+                _llm(),
+                on_progress=(
+                    context.report_progress if custom_dimensions else None
+                ),
+            )
+            saved = ComparisonArtifactService(
+                _research_repository()
+            ).generate_and_save(
+                str(payload["project_id"]),
+                [str(item) for item in payload["source_ids"]],
+                workflow,
+                title=str(payload.get("title") or "跨论文比较矩阵"),
+                custom_dimensions=custom_dimensions,
+            )
+            if not custom_dimensions:
+                context.report_progress(1, 1)
+            return {
+                "artifact_id": saved.artifact.id,
+                "revision_id": saved.revision.id,
+            }
+
         return {
+            "comparison": comparison_handler,
             "deep_read": deep_read_handler,
             "deep_read_field": deep_read_field_handler,
         }

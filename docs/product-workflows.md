@@ -1,6 +1,6 @@
 # PRAgent 产品工作流
 
-本文记录当前已实现的 Phase 2–4 Web 工作流；比较、综述与导出仍属于后续 Phase，不在这里提前宣称可用。
+本文记录当前已实现的 Phase 2–4 Web 工作流和 Step 17 比较后端；比较 UI、综述与导出仍属于后续 Step，不在这里提前宣称可用。
 
 ## 1. 创建研究项目
 
@@ -55,7 +55,15 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 
 模型输出在保存前验证 Pydantic schema、evidence 来源范围、当前 freshness 和 quote 精确子串；全流程最多进行一次 JSON repair。模型名、usage、finish reason、prompt/schema version 随 revision 保存。
 
-## 6. JSON API
+## 6. Project-scoped 比较后端
+
+比较工作流只接受当前 project 明确选择的 2–20 个不重复来源。每个来源必须具有 `ready` 且未 stale 的当前精读卡；缺失与过期来源分别返回稳定列表，供下一步 UI 先排队补齐，而不是让 Agent 从整库自行挑选论文。
+
+默认九个比较维度直接复用精读卡字段，不再次调用模型。自定义维度按“一个维度覆盖全部所选来源”执行有界 LLM 调用；输出必须为完整 source × dimension 矩阵，并且只能使用对应来源精读卡已有的 evidence ID 和逐字 quote。全流程最多一次 JSON repair。
+
+比较生成已注册为 SQLite-backed `comparison` worker job。保存 revision 时在一个事务内重新检查 project fingerprint、来源 membership、索引关联、evidence 新鲜度、evidence 所属来源、quote 原文子串，以及 JSON content 与 evidence links 完整一致。当前仅完成后端 schema/workflow/artifact/job handler；创建、查看、编辑和版本 UI/API 属于 Step 18。
+
+## 7. JSON API
 
 新能力位于 `/api/v1`：
 

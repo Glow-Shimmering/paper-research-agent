@@ -1,6 +1,19 @@
 """PRAgent 结构化研究工作流。"""
 
 from .artifacts import DeepReadArtifactService, SavedDeepRead
+from .compare import (
+    COMPARISON_PROMPT_VERSION,
+    ComparisonArtifactService,
+    ComparisonBudget,
+    ComparisonBudgetExceeded,
+    ComparisonDraft,
+    ComparisonError,
+    ComparisonPrerequisiteError,
+    ComparisonSchemaError,
+    ComparisonWorkflow,
+    SavedComparison,
+    default_comparison_dimensions,
+)
 from .deep_read import (
     DEEP_READ_PROMPT_VERSION,
     DeepReadBudget,
@@ -12,15 +25,34 @@ from .deep_read import (
     DeepReadWorkflow,
 )
 from .schemas import (
+    COMPARISON_SCHEMA_VERSION,
     DEEP_READ_FIELD_LABELS,
     DEEP_READ_FIELD_ORDER,
     DEEP_READ_SCHEMA_VERSION,
+    ComparisonCell,
+    ComparisonDimension,
+    ComparisonDimensionCells,
+    ComparisonMatrix,
     DeepReadCard,
     DeepReadField,
     EvidenceRef,
 )
 
 __all__ = [
+    "COMPARISON_PROMPT_VERSION",
+    "COMPARISON_SCHEMA_VERSION",
+    "ComparisonArtifactService",
+    "ComparisonBudget",
+    "ComparisonBudgetExceeded",
+    "ComparisonCell",
+    "ComparisonDimension",
+    "ComparisonDimensionCells",
+    "ComparisonDraft",
+    "ComparisonError",
+    "ComparisonMatrix",
+    "ComparisonPrerequisiteError",
+    "ComparisonSchemaError",
+    "ComparisonWorkflow",
     "DEEP_READ_FIELD_LABELS",
     "DEEP_READ_FIELD_ORDER",
     "DEEP_READ_PROMPT_VERSION",
@@ -36,5 +68,7 @@ __all__ = [
     "DeepReadSchemaError",
     "DeepReadWorkflow",
     "EvidenceRef",
+    "SavedComparison",
     "SavedDeepRead",
+    "default_comparison_dimensions",
 ]

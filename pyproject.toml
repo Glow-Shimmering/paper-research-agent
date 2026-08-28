@@ -23,6 +23,7 @@ dependencies = [
     "uvicorn>=0.29",
     "openai>=1.30",
     "python-dotenv>=1.0",
+    "citeproc-py>=0.11,<1",
     "textual>=0.60",
     "pyperclip>=1.8",
 ]
@@ -49,6 +50,8 @@ pragent = [
     "web/static/*.css",
     "web/static/*.js",
     "web/static/*.txt",
+    "styles/*.csl",
+    "styles/*.md",
 ]
 
 [tool.pytest.ini_options]

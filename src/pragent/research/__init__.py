@@ -14,6 +14,16 @@ from .compare import (
     SavedComparison,
     default_comparison_dimensions,
 )
+from .citations import (
+    STYLE_REGISTRY,
+    CitationRenderError,
+    CitationStyleError,
+    CitationStyleSpec,
+    get_citation_style,
+    render_bibliography,
+    render_citation_cluster,
+    source_to_csl_json,
+)
 from .deep_read import (
     DEEP_READ_PROMPT_VERSION,
     DeepReadBudget,
@@ -82,6 +92,14 @@ __all__ = [
     "ComparisonPrerequisiteError",
     "ComparisonSchemaError",
     "ComparisonWorkflow",
+    "STYLE_REGISTRY",
+    "CitationRenderError",
+    "CitationStyleError",
+    "CitationStyleSpec",
+    "get_citation_style",
+    "render_bibliography",
+    "render_citation_cluster",
+    "source_to_csl_json",
     "DEEP_READ_FIELD_LABELS",
     "DEEP_READ_FIELD_ORDER",
     "DEEP_READ_PROMPT_VERSION",

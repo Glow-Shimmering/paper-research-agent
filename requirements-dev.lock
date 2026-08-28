@@ -7,6 +7,7 @@ annotated-types==0.8.0
 anyio==4.14.2
 babel==2.18.0
 certifi==2026.7.22
+citeproc-py==0.11.0
 charset-normalizer==3.4.9
 click==8.4.2
 colorama==0.4.6

@@ -72,6 +72,8 @@ Project-level `comparison` artifact 同样使用专用原子保存入口。其 c
 
 `review_section` 同样是 project-level artifact，并固定绑定当前 review outline revision 与 section key。content 由稳定 claim key、文本和结构化 citation tokens 组成；专用保存事务只接受该 outline section planned claims 已出现的 source/evidence/quote 三元组。人工编辑新增 revision，不覆盖模型稿；切换为 `insufficient_evidence` 时对应 claim 的 tokens 和 `artifact_evidence` links 同时为空。
 
+引用导出不另建一份可漂移的题录表。`ResearchSource` 在渲染边界转换为 CSL-JSON：`id` 保持内部 source ID，paper/web 分别映射为学术条目或 `webpage`，已有 canonical 字段和 provider metadata 映射到 CSL 的 author/issued/DOI/URL/container-title/volume/issue/page/publisher/language；缺失字段不推断。网页的 `fetched_at` 仅作为 `accessed` 日期。这样 artifact revision、evidence link 与参考文献始终通过同一 source ID 关联。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

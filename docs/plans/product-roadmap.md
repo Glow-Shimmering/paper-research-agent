@@ -318,7 +318,7 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 ### Phase 6 — 引用与多格式导出
 
-- [ ] Step 22：规范化 source metadata 为 CSL-JSON，建立 style registry、license attribution 和 GB/T/APA/IEEE/Chicago/MLA golden tests。
+- [x] Step 22：规范化 source metadata 为 CSL-JSON，建立 style registry、license attribution 和 GB/T/APA/IEEE/Chicago/MLA golden tests。（`research/citations.py` 提供 fail-closed registry/normalizer/renderer；官方 CSL 样式及固定提交、CC BY-SA 3.0 归因随 wheel 打包；五种样式 citation/bibliography golden tests 与 wheel 资源探针已覆盖。）
 - [ ] Step 23：实现 Markdown、DOCX、CSV、JSON deterministic renderers；导出使用当前 artifact revision，文件名安全且原子写入。
 - [ ] Step 24：实现 Web export preview/download；DOCX 包含标题层级、比较表、格式化引用、参考文献和 evidence appendix。
 

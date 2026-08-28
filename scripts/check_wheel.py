@@ -32,6 +32,12 @@ REQUIRED = {
     "pragent/web/static/app.css",
     "pragent/web/static/htmx.min.js",
     "pragent/web/static/HTMX-LICENSE.txt",
+    "pragent/styles/gb-t-7714-2015-numeric.csl",
+    "pragent/styles/apa-7.csl",
+    "pragent/styles/ieee.csl",
+    "pragent/styles/chicago-author-date.csl",
+    "pragent/styles/mla.csl",
+    "pragent/styles/ATTRIBUTION.md",
 }
 
 
@@ -72,10 +78,12 @@ import tempfile
 import pragent
 from fastapi.testclient import TestClient
 from pragent.store import Store
+from pragent.research import STYLE_REGISTRY
 from pragent.webapp import _web_directory, create_app
 
 assert str(Path(pragent.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()))
 assert Path(_web_directory()).is_dir()
+assert len(STYLE_REGISTRY) == 5
 with tempfile.TemporaryDirectory() as raw:
     store = Store(Path(raw) / 'wheel.db')
     with TestClient(

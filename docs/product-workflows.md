@@ -1,6 +1,6 @@
 # PRAgent 产品工作流
 
-本文记录当前已实现的 Phase 2–5 研究工作流；导出仍属于后续 Step，不在这里提前宣称可用。
+本文记录当前已实现的 Phase 2–5 研究工作流和 Phase 6 的引用规范化；多格式导出仍属于后续 Step，不在这里提前宣称可用。
 
 ## 1. 创建研究项目
 
@@ -80,6 +80,14 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 章节人工编辑以 artifact version CAS 追加 `created_by=user` revision；默认保留原 citation tokens，也可以显式切换为证据不足并同时清空 refs/links。章节生成已注册为持久 `review_section` worker job；交互页面已完成，确定性正文/引用导出由后续阶段完成。
 
 Review Web/API 从 ready、未 stale 的 comparison 自动取得来源集合，用户不能在提纲或章节请求中静默加入项目外论文。页面支持多研究问题选择、提纲章节标题/目标调整、逐节生成与显式重试、claim evidence drawer、提纲 revision 历史和当前章节的整稿预览。提纲或绑定问题/比较/来源漂移后页面只保留历史读取，禁止继续派生章节。
+
+## 7. 引用元数据与样式
+
+当前 `ResearchSource` 的 canonical metadata 会在导出边界确定性转换为 CSL-JSON，不修改数据库原始记录，也不凭空补齐缺失字段。转换包含题名、作者、年份、DOI、URL、访问日期以及期刊、卷期、页码、出版社和语言；英文空格姓名按 given/family 拆分，无法可靠拆分的姓名保留为 CSL `literal`。
+
+内置 style registry 固定公开 `gb-t-7714-2015-numeric`、`apa-7`、`ieee`、`chicago-author-date` 和 `mla` 五个键。每个 CSL 文件加载时执行 schema 校验，未知样式或 processor 失败都会明确报错，不回退到另一个格式。样式来自 Citation Style Language 官方 styles 仓库，版本、原始链接和 CC BY-SA 3.0 归因随 wheel 保存在 `pragent/styles/ATTRIBUTION.md`。
+
+当前接口只负责规范化与渲染 citation cluster/bibliography；Markdown、DOCX、CSV、JSON 的 artifact renderer 从 Step 23 开始接入。
 
 HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-encoded parser 保留为列表，既不丢失多研究问题选择，也继续受 1 MB/100 字段上限约束。
 

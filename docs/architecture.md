@@ -123,6 +123,8 @@ SQLite schema v6 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 
 Markdown 与 DOCX 使用同一个文档级 CSL processor context；JSON 通过 `ExportEnvelope` schema 后按 key 排序；CSV 固定 header、row order 与 LF；DOCX 固定 core properties、OOXML ZIP entry 顺序/时间和表格 DXA geometry。文件先在目标目录写临时文件，随后 `os.replace`，安全 stem 不接受 Windows 保留名、路径分隔符或控制字符。
 
+Web 正式导出是 idempotent SQLite job：请求把 artifact/source/review-section revision contract 写入 payload，worker 复核后生成到 `exports/<job-id>/`。API/UI 下载不返回或接受服务器绝对路径，而是将 requested basename 与 succeeded job result 文件白名单匹配，再验证 resolve 后仍位于该 job 目录。同步 preview 只返回有长度上限且经模板 autoescape 的 Markdown 文本。
+
 ### 旧 Pagent 显式导入
 
 `import_pagent.py` 只接受已验证的 Pagent schema v1/v2，默认 dry-run，且从不在旧目录上运行 migration。执行导入时先建立文件 hash 清单，再通过 SQLite online backup 把包含已提交 WAL 的一致快照写入目标同盘 staging；路径重写、v6 migration、计数/外键/quick-check 和文件二次 hash 均在 staging 完成。只有全部通过后才原子重命名为目标目录，目标已存在或中途失败均 fail closed。

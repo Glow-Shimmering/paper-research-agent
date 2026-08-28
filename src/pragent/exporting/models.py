@@ -37,6 +37,13 @@ class FrozenEvidence:
 
 
 @dataclass(frozen=True)
+class FrozenReviewSection:
+    artifact: ResearchArtifact
+    revision: ArtifactRevision
+    freshness: ArtifactFreshness
+
+
+@dataclass(frozen=True)
 class FrozenArtifactExport:
     project: ResearchProject
     artifact: ResearchArtifact
@@ -44,6 +51,7 @@ class FrozenArtifactExport:
     freshness: ArtifactFreshness
     sources: tuple[FrozenSource, ...]
     evidence: tuple[FrozenEvidence, ...]
+    review_sections: tuple[FrozenReviewSection, ...] = ()
 
     @property
     def citation_style(self) -> str:
@@ -81,3 +89,4 @@ class ExportEnvelope(BaseModel):
     citation_style: str = Field(min_length=1)
     sources: list[dict[str, Any]]
     evidence: list[dict[str, Any]]
+    review_sections: list[dict[str, Any]] = Field(default_factory=list)

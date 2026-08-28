@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}导出 {{ artifact.title }} · PRAgent{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}">← 返回项目</a></p>
+<section class="hero"><div><p class="eyebrow">Deterministic export</p><h1>{{ artifact.title }}</h1><p>当前 revision {{ revision.revision_number }} · {{ project.citation_style }}</p></div></section>
+{% if freshness.stale %}<div class="action-message failure">当前 artifact 已过期；导出仍保留该 revision 的 freshness 标记与证据快照。</div>{% endif %}
+<section class="panel export-controls">
+  <div class="section-heading"><h2>生成下载文件</h2><span>后台持久任务</span></div>
+  <form class="inline-form" method="post" hx-post="/ui/projects/{{ project.id }}/artifacts/{{ artifact.id }}/exports" hx-target="#export-action" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>格式<select name="format"><option value="markdown">Markdown</option><option value="docx">DOCX</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+    <button type="submit">开始导出</button>
+  </form>
+  <div id="export-action"></div>
+</section>
+<section class="panel">
+  <div class="section-heading"><h2>Markdown 预览</h2><button class="secondary compact" hx-get="/ui/projects/{{ project.id }}/artifacts/{{ artifact.id }}/exports/preview" hx-target="#export-preview" hx-swap="innerHTML">刷新当前 revision</button></div>
+  <div id="export-preview">{% include "fragments/export_preview.html" %}</div>
+</section>
+{% endblock %}

@@ -2,5 +2,6 @@
 {% block title %}{{ outline.title }} · PRAgent{% endblock %}
 {% block content %}
 <p><a class="back" href="/ui/projects/{{ project.id }}/reviews">← 返回文献综述</a></p>
+<p><a class="button secondary" href="/ui/projects/{{ project.id }}/artifacts/{{ artifact.id }}/exports">整稿预览与导出</a></p>
 {% include "fragments/review_state.html" %}
 {% endblock %}

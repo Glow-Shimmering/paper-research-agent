@@ -15,6 +15,7 @@ from .agent_api import register_agent_api
 from .answer import answer_stream
 from .answer import ask as answer_ask
 from .embeddings import Embedder
+from .exporting import ArtifactExportService, ExportSnapshotConflict
 from .indexer import index_library
 from .ingestion import FetchPolicy, SafeFetcher, SnapshotStore, WebIngestService
 from .jobs import JobQueue, WorkerPool
@@ -50,6 +51,7 @@ from .store import Store
 from .web.routes import (
     register_artifact_routes,
     register_comparison_routes,
+    register_export_routes,
     register_project_routes,
     register_review_routes,
 )
@@ -132,6 +134,7 @@ def create_app(
     snapshot_store=None,
     pdf_downloader=None,
     download_directory=None,
+    export_directory=None,
     job_repository=None,
     job_handlers=None,
     job_worker_count: int | None = None,
@@ -327,13 +330,69 @@ def create_app(
                 "revision_id": saved.revision.id,
             }
 
+        def export_handler(context, payload):
+            context.report_progress(0, 1)
+            service = ArtifactExportService(_research_repository(), _store())
+            snapshot = service.freeze_current(str(payload["artifact_id"]))
+            if snapshot.revision.id != str(payload["expected_revision_id"]):
+                raise ExportSnapshotConflict("artifact current revision 已变化，请重新导出")
+            expected_sources = {
+                str(key): int(value)
+                for key, value in dict(payload.get("source_versions") or {}).items()
+            }
+            current_sources = {
+                item.source.id: item.source.version for item in snapshot.sources
+            }
+            expected_sections = {
+                str(key): str(value)
+                for key, value in dict(
+                    payload.get("review_section_revisions") or {}
+                ).items()
+            }
+            current_sections = {
+                item.artifact.id: item.revision.id
+                for item in snapshot.review_sections
+            }
+            if (
+                snapshot.citation_style != str(payload["citation_style"])
+                or snapshot.freshness.current_fingerprint
+                != payload.get("freshness_fingerprint")
+                or current_sources != expected_sources
+                or current_sections != expected_sections
+            ):
+                raise ExportSnapshotConflict("导出依赖已变化，请重新预览并导出")
+            output = _export_directory() / context.job.id
+            files = service.export_snapshot(snapshot, str(payload["format"]), output)
+            context.report_progress(1, 1)
+            return {
+                "artifact_id": snapshot.artifact.id,
+                "revision_id": snapshot.revision.id,
+                "format": str(payload["format"]),
+                "files": [
+                    {
+                        "name": item.path.name,
+                        "media_type": item.media_type,
+                        "size": item.size,
+                    }
+                    for item in files
+                ],
+            }
+
         return {
             "comparison": comparison_handler,
             "deep_read": deep_read_handler,
             "deep_read_field": deep_read_field_handler,
             "review_outline": review_outline_handler,
             "review_section": review_section_handler,
+            "export": export_handler,
         }
+
+    def _export_directory() -> Path:
+        directory = (
+            Path(export_directory) if export_directory is not None else config.EXPORT_DIR
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def _embedder():
         nonlocal owned_embedder
@@ -704,6 +763,14 @@ def create_app(
         repository_factory=_research_repository,
         job_queue_factory=_job_queue,
         store_factory=_store,
+        templates_directory=_web_resource_directory("templates"),
+    )
+    register_export_routes(
+        app,
+        repository_factory=_research_repository,
+        job_queue_factory=_job_queue,
+        store_factory=_store,
+        export_directory_factory=_export_directory,
         templates_directory=_web_resource_directory("templates"),
     )
     register_discovery_routes(

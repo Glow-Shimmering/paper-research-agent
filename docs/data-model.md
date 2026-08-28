@@ -76,6 +76,8 @@ Project-level `comparison` artifact 同样使用专用原子保存入口。其 c
 
 `FrozenArtifactExport` 不是新持久表，而是一次导出的只读快照：包含 current `ArtifactRevision`、当时的 project/artifact/source version、`ArtifactFreshness`、按 artifact content 排序的 sources/identities/provider records，以及按 evidence link 稳定排序的 evidence snapshots。JSON envelope 的 `schema_version` 描述导出合同，revision 自身的 `schema_version` 继续描述 artifact content，两者不能混用。
 
+当主 artifact 是 `review_outline` 时，快照额外保存按 outline section 顺序选择的 `FrozenReviewSection`（artifact、current revision、freshness）；只接受 `outline_artifact_id + outline_revision_id + section_key` 全部匹配的草稿。其 evidence links 与提纲 links 一并进入 appendix，JSON 的 `review_sections` 保留每节 revision/model metadata。正式 export job 也持久化这些 revision IDs 作为执行前 CAS contract。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

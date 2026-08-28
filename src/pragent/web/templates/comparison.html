@@ -2,5 +2,6 @@
 {% block title %}{{ artifact.title }} · PRAgent{% endblock %}
 {% block content %}
 <p><a class="back" href="/ui/projects/{{ project.id }}/comparisons">← 返回跨论文比较</a></p>
+<p><a class="button secondary" href="/ui/projects/{{ project.id }}/artifacts/{{ artifact.id }}/exports">预览与导出</a></p>
 {% include "fragments/comparison_state.html" %}
 {% endblock %}

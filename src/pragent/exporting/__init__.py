@@ -10,6 +10,7 @@ from .models import (
     ExportedFile,
     FrozenArtifactExport,
     FrozenEvidence,
+    FrozenReviewSection,
     FrozenSource,
     RenderedExport,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "ExportedFile",
     "FrozenArtifactExport",
     "FrozenEvidence",
+    "FrozenReviewSection",
     "FrozenSource",
     "RenderedExport",
     "UnsupportedArtifactError",

@@ -320,7 +320,7 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 - [x] Step 22：规范化 source metadata 为 CSL-JSON，建立 style registry、license attribution 和 GB/T/APA/IEEE/Chicago/MLA golden tests。（`research/citations.py` 提供 fail-closed registry/normalizer/renderer；官方 CSL 样式及固定提交、CC BY-SA 3.0 归因随 wheel 打包；五种样式 citation/bibliography golden tests 与 wheel 资源探针已覆盖。）
 - [x] Step 23：实现 Markdown、DOCX、CSV、JSON deterministic renderers；导出使用当前 artifact revision，文件名安全且原子写入。（`exporting/` 冻结 current revision/source/provenance/evidence/freshness 并在结束前复核漂移；四类 renderer、文档级 CSL 编号、JSON schema、CSV round-trip、deterministic OOXML、安全 stem 与同目录 `fsync + os.replace` 已有集成测试。）
-- [ ] Step 24：实现 Web export preview/download；DOCX 包含标题层级、比较表、格式化引用、参考文献和 evidence appendix。
+- [x] Step 24：实现 Web export preview/download；DOCX 包含标题层级、比较表、格式化引用、参考文献和 evidence appendix。（Markdown preview 有界且 autoescape；正式下载走持久 export job，复核 revision/source/style/section contract 并按 job result 白名单下载；review outline 聚合当前章节 revisions，DOCX/Markdown/JSON 包含整稿、格式化引用与跨 revision evidence appendix。）
 
 **Gate：** 同一 frozen artifact 重复导出字节/语义稳定（DOCX 忽略容器时间字段）；CSV 可重新读取；JSON 通过 schema；五种引用样式经人工样例核对。
 

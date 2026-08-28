@@ -17,7 +17,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 from pragent.research import DEEP_READ_FIELD_LABELS
 
-from .common import citation_output, parse_artifact_content
+from .common import citation_output, parse_artifact_content, review_drafts
 from .models import FrozenArtifactExport
 
 _BLUE = RGBColor(0x2E, 0x74, 0xB5)
@@ -39,7 +39,7 @@ def render_docx(snapshot: FrozenArtifactExport) -> bytes:
     elif artifact_type == "comparison":
         _render_comparison(document, snapshot, content, labels)
     elif artifact_type == "review_outline":
-        _render_outline(document, content, labels)
+        _render_outline(document, snapshot, content, labels)
     elif artifact_type == "review_section":
         _render_section(document, content, labels)
     _render_references(document, citations.bibliography)
@@ -150,14 +150,19 @@ def _render_comparison(document, snapshot, matrix, labels) -> None:
     _set_table_geometry(table, (1900, 2200, 5260))
 
 
-def _render_outline(document, outline, labels) -> None:
+def _render_outline(document, snapshot, outline, labels) -> None:
     document.add_heading("研究问题", level=1)
     for question in outline.research_questions:
         _add_body(document, question.question)
+    drafts = review_drafts(snapshot)
     for section in outline.sections:
         document.add_heading(_clean(section.title), level=1)
         _add_body(document, section.objective)
-        for claim in section.planned_claims:
+        draft = drafts.get(section.key)
+        claims = draft.claims if draft is not None else section.planned_claims
+        if draft is None:
+            _add_body(document, "本节尚未生成草稿；以下为提纲计划。", color=_MUTED)
+        for claim in claims:
             text = "证据不足" if claim.insufficient_evidence else claim.text
             _add_body(document, _with_citation(text, next(labels)))
 

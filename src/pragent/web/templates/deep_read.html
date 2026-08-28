@@ -2,7 +2,7 @@
 {% block title %}{{ artifact.title }} · PRAgent{% endblock %}
 {% block content %}
 <p><a class="back" href="/ui/projects/{{ project.id }}/deep-reads">← 返回单篇精读</a></p>
-<section class="hero"><div><p class="eyebrow">Deep read card</p><h1>{{ artifact.title }}</h1><p>revision {{ revision.revision_number if revision else 0 }}{% if revision_public and revision_public.model %} · {{ revision_public.model }}{% endif %}</p></div></section>
+<section class="hero"><div><p class="eyebrow">Deep read card</p><h1>{{ artifact.title }}</h1><p>revision {{ revision.revision_number if revision else 0 }}{% if revision_public and revision_public.model %} · {{ revision_public.model }}{% endif %}</p></div>{% if revision %}<a class="button secondary" href="/ui/projects/{{ project.id }}/artifacts/{{ artifact.id }}/exports">预览与导出</a>{% endif %}</section>
 {% if freshness.stale %}<div class="notice error">来源已更新：当前卡片已过期，但历史版本和证据仍可查看。</div>{% endif %}
 <div id="deep-read-state">
   {% include "fragments/deep_read_state.html" %}

@@ -21,6 +21,14 @@ def export_payload(snapshot: FrozenArtifactExport) -> dict[str, Any]:
         "citation_style": snapshot.citation_style,
         "sources": [_source_payload(item) for item in snapshot.sources],
         "evidence": [_evidence_payload(item) for item in snapshot.evidence],
+        "review_sections": [
+            {
+                "artifact": asdict(item.artifact),
+                "revision": asdict(item.revision),
+                "freshness": asdict(item.freshness),
+            }
+            for item in snapshot.review_sections
+        ],
     }
     return ExportEnvelope.model_validate(payload).model_dump(mode="json")
 

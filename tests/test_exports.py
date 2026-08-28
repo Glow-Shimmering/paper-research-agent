@@ -1,10 +1,13 @@
 import csv
 import io
 import json
+import time
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from docx import Document
+from fastapi.testclient import TestClient
 
 from pragent.exporting import (
     ArtifactExportService,
@@ -15,9 +18,16 @@ from pragent.exporting import (
     safe_export_stem,
 )
 from pragent.models import Chunk, Paper
-from pragent.research import ComparisonCell, ComparisonDimension, ComparisonMatrix
-from pragent.storage import ResearchRepository
+from pragent.research import (
+    ComparisonCell,
+    ComparisonDimension,
+    ComparisonMatrix,
+    ReviewOutline,
+    ReviewSectionDraft,
+)
+from pragent.storage import JobRepository, ResearchRepository
 from pragent.store import Store
+from pragent.webapp import create_app
 
 
 def _seed_comparison(tmp_path):
@@ -157,5 +167,170 @@ def test_csv_round_trip_safe_names_and_atomic_current_revision_export(tmp_path):
     assert revision_id in snapshot.revision.id
     assert safe_export_stem("CON", "artifact:unsafe", 2).startswith("research-artifact-")
 
+    repository.close()
+    store.close()
+
+
+def test_review_export_assembles_current_section_drafts_and_marks_missing(tmp_path):
+    store, repository, comparison_id, _revision_id = _seed_comparison(tmp_path)
+    comparison = repository.get_artifact(comparison_id)
+    project = repository.get_project(comparison.project_id)
+    sources = [item.source for item in repository.list_project_sources(project.id).items]
+    evidence = store.list_evidence()
+    question = repository.create_question(project.id, "不同方法的证据边界是什么？")
+    claims = [
+        {
+            "text": "两篇论文的方法边界可比较。",
+            "source_ids": [item.id for item in sources],
+            "evidence_refs": [
+                {
+                    "source_id": source.id,
+                    "evidence_id": evidence[index].id,
+                    "quote": evidence[index].text,
+                }
+                for index, source in enumerate(sources)
+            ],
+            "insufficient_evidence": False,
+        }
+    ]
+    outline_content = ReviewOutline(
+        title="完整综述",
+        research_questions=[
+            {"id": question.id, "question": question.question, "version": question.version}
+        ],
+        source_ids=[item.id for item in sources],
+        comparison_artifact_id=comparison.id,
+        comparison_revision_id=repository.get_current_artifact_revision(comparison.id).id,
+        sections=[
+            {
+                "key": "methods",
+                "title": "方法",
+                "objective": "综合方法差异",
+                "source_ids": [item.id for item in sources],
+                "planned_claims": claims,
+            },
+            {
+                "key": "limits",
+                "title": "局限",
+                "objective": "总结证据边界",
+                "source_ids": [item.id for item in sources],
+                "planned_claims": claims,
+            },
+        ],
+    )
+    outline = repository.create_artifact(
+        project.id, "review_outline", title="完整综述", status="generating"
+    )
+    outline_revision = repository.append_artifact_revision(
+        outline.id,
+        outline_content.model_dump(mode="json"),
+        expected_artifact_version=outline.version,
+        created_by="system",
+        evidence_links=[
+            (item.id, f"$.sections.methods.claims.0", index)
+            for index, item in enumerate(evidence)
+        ],
+        schema_version=1,
+    )
+    draft_content = ReviewSectionDraft(
+        outline_artifact_id=outline.id,
+        outline_revision_id=outline_revision.id,
+        section_key="methods",
+        section_title="方法",
+        claims=[
+            {
+                "key": "method_synthesis",
+                "text": "这是当前章节 revision 的整稿正文。",
+                "citation_tokens": claims[0]["evidence_refs"],
+                "insufficient_evidence": False,
+            }
+        ],
+    )
+    section = repository.create_artifact(
+        project.id, "review_section", title="方法", status="generating"
+    )
+    repository.append_artifact_revision(
+        section.id,
+        draft_content.model_dump(mode="json"),
+        expected_artifact_version=section.version,
+        created_by="system",
+        evidence_links=[
+            (item.id, "$.claims.0", index) for index, item in enumerate(evidence)
+        ],
+        schema_version=1,
+    )
+
+    snapshot = ArtifactExportService(repository, store).freeze_current(outline.id)
+    markdown = render_markdown(snapshot).decode("utf-8")
+    assert len(snapshot.review_sections) == 1
+    assert "这是当前章节 revision 的整稿正文" in markdown
+    assert "本节尚未生成草稿" in markdown
+    assert len(ExportEnvelope.model_validate_json(render_json(snapshot)).review_sections) == 1
+
+    repository.close()
+    store.close()
+
+
+def test_web_export_preview_persistent_job_and_scoped_download(tmp_path):
+    store, repository, artifact_id, revision_id = _seed_comparison(tmp_path)
+    project_id = repository.get_artifact(artifact_id).project_id
+    jobs = JobRepository(store.db_path)
+    export_dir = tmp_path / "web-exports"
+    app = create_app(
+        store=store,
+        research_repository=repository,
+        job_repository=jobs,
+        job_worker_count=1,
+        export_directory=export_dir,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        page = client.get(
+            f"/ui/projects/{project_id}/artifacts/{artifact_id}/exports"
+        )
+        assert page.status_code == 200
+        assert "Markdown 预览" in page.text and "比较矩阵" in page.text
+        preview = client.get(
+            f"/api/v1/projects/{project_id}/artifacts/{artifact_id}/exports/preview"
+        )
+        assert preview.status_code == 200
+        assert preview.json()["revision_id"] == revision_id
+        invalid = client.post(
+            f"/api/v1/projects/{project_id}/artifacts/{artifact_id}/exports",
+            json={"format": "pdf"},
+        )
+        assert invalid.status_code == 400
+        started = client.post(
+            f"/api/v1/projects/{project_id}/artifacts/{artifact_id}/exports",
+            json={"format": "json"},
+        )
+        assert started.status_code == 202
+        job_id = started.json()["job"]["id"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            current = client.get(
+                f"/api/v1/projects/{project_id}/artifacts/{artifact_id}/exports/jobs/{job_id}"
+            )
+            assert current.status_code == 200
+            job = current.json()
+            if job["terminal"]:
+                break
+            time.sleep(0.02)
+        assert job["status"] == "succeeded"
+        assert job["revision_id"] == revision_id
+        filename = job["files"][0]["name"]
+        downloaded = client.get(
+            f"/api/v1/projects/{project_id}/artifacts/{artifact_id}/exports/jobs/"
+            f"{job_id}/files/{quote(filename)}"
+        )
+        assert downloaded.status_code == 200
+        assert ExportEnvelope.model_validate_json(downloaded.content).revision["id"] == revision_id
+        missing = client.get(
+            f"/api/v1/projects/{project_id}/artifacts/{artifact_id}/exports/jobs/"
+            f"{job_id}/files/not-listed.json"
+        )
+        assert missing.status_code == 404
+
+    jobs.close()
     repository.close()
     store.close()

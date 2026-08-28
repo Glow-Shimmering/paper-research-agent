@@ -84,11 +84,19 @@ def citation_clusters(
             (cell.source_id,) if cell.evidence_refs else () for cell in content.cells
         )
     if artifact_type == "review_outline":
-        return tuple(
-            _ordered_unique(ref.source_id for ref in claim.evidence_refs)
-            for section in content.sections
-            for claim in section.planned_claims
-        )
+        drafts = review_drafts(snapshot)
+        clusters = []
+        for section in content.sections:
+            draft = drafts.get(section.key)
+            claims = draft.claims if draft is not None else section.planned_claims
+            for claim in claims:
+                refs = (
+                    claim.citation_tokens
+                    if hasattr(claim, "citation_tokens")
+                    else claim.evidence_refs
+                )
+                clusters.append(_ordered_unique(ref.source_id for ref in refs))
+        return tuple(clusters)
     if artifact_type == "review_section":
         return tuple(
             _ordered_unique(ref.source_id for ref in claim.citation_tokens)
@@ -103,6 +111,14 @@ def citation_output(snapshot: FrozenArtifactExport, content: Any):
         citation_clusters(snapshot, content),
         snapshot.citation_style,
     )
+
+
+def review_drafts(snapshot: FrozenArtifactExport) -> dict[str, ReviewSectionDraft]:
+    return {
+        draft.section_key: draft
+        for item in snapshot.review_sections
+        for draft in (ReviewSectionDraft.model_validate(item.revision.content),)
+    }
 
 
 def _ordered_unique(values: Iterable[str]) -> tuple[str, ...]:

@@ -27,6 +27,7 @@ from .models import (
     ExportedFile,
     FrozenArtifactExport,
     FrozenEvidence,
+    FrozenReviewSection,
     FrozenSource,
     RenderedExport,
 )
@@ -89,12 +90,47 @@ class ArtifactExportService:
                 )
             )
 
+        review_sections = []
+        if first.artifact_type == "review_outline":
+            candidates = {}
+            for candidate in self.repository.list_artifacts(
+                first.project_id, artifact_type="review_section", limit=200
+            ).items:
+                current = self.repository.get_current_artifact_revision(candidate.id)
+                if current is None:
+                    continue
+                try:
+                    draft = parse_content("review_section", current.content)
+                except ExportError:
+                    continue
+                if (
+                    draft.outline_artifact_id == first.id
+                    and draft.outline_revision_id == revision.id
+                    and draft.section_key not in candidates
+                ):
+                    candidates[draft.section_key] = FrozenReviewSection(
+                        candidate,
+                        replace(
+                            current,
+                            content=copy.deepcopy(current.content),
+                            usage=copy.deepcopy(current.usage),
+                        ),
+                        self.repository.artifact_freshness(candidate.id),
+                    )
+            review_sections = [
+                candidates[section.key]
+                for section in content.sections
+                if section.key in candidates
+            ]
+
         evidence_items = []
-        for link in self.repository.list_artifact_evidence(revision.id):
-            evidence = self.store.get_evidence(link.evidence_id)
-            if evidence is None:
-                raise ExportError(f"artifact evidence 不存在：{link.evidence_id}")
-            evidence_items.append(FrozenEvidence(link, evidence))
+        evidence_revisions = (revision, *(item.revision for item in review_sections))
+        for evidence_revision in evidence_revisions:
+            for link in self.repository.list_artifact_evidence(evidence_revision.id):
+                evidence = self.store.get_evidence(link.evidence_id)
+                if evidence is None:
+                    raise ExportError(f"artifact evidence 不存在：{link.evidence_id}")
+                evidence_items.append(FrozenEvidence(link, evidence))
 
         freshness = self.repository.artifact_freshness(first.id)
         last = self.repository.get_artifact(first.id)
@@ -110,6 +146,20 @@ class ArtifactExportService:
                 raise ExportSnapshotConflict("artifact 来源在冻结期间变化")
         if self.repository.artifact_freshness(first.id) != freshness:
             raise ExportSnapshotConflict("artifact freshness 在冻结期间变化")
+        for item in review_sections:
+            current_artifact = self.repository.get_artifact(item.artifact.id)
+            current_revision = self.repository.get_current_artifact_revision(
+                item.artifact.id
+            )
+            if (
+                current_artifact is None
+                or current_revision is None
+                or current_artifact.version != item.artifact.version
+                or current_revision.id != item.revision.id
+                or self.repository.artifact_freshness(item.artifact.id)
+                != item.freshness
+            ):
+                raise ExportSnapshotConflict("review section 在冻结期间变化")
 
         frozen_revision = replace(
             revision,
@@ -123,6 +173,7 @@ class ArtifactExportService:
             freshness=freshness,
             sources=tuple(sources),
             evidence=tuple(evidence_items),
+            review_sections=tuple(review_sections),
         )
 
     def render(self, snapshot: FrozenArtifactExport, format: str) -> tuple[RenderedExport, ...]:
@@ -151,6 +202,14 @@ class ArtifactExportService:
         self, artifact_id: str, format: str, output_dir: Path | str
     ) -> tuple[ExportedFile, ...]:
         snapshot = self.freeze_current(artifact_id)
+        return self.export_snapshot(snapshot, format, output_dir)
+
+    def export_snapshot(
+        self,
+        snapshot: FrozenArtifactExport,
+        format: str,
+        output_dir: Path | str,
+    ) -> tuple[ExportedFile, ...]:
         rendered = self.render(snapshot, format)
         directory = Path(output_dir)
         directory.mkdir(parents=True, exist_ok=True)

@@ -93,6 +93,10 @@ JSON 包含固定 export schema version、artifact/revision/model metadata、fre
 
 落盘文件名由受限标题、artifact ID 和 revision number 组成，拒绝 renderer 提供的不安全后缀；临时文件在目标目录写完、flush/fsync 后使用 `os.replace` 原子替换。导出期间若 artifact、来源或 freshness 发生变化，冻结过程明确冲突失败，不混合两个 revision 的数据。
 
+Web 的“预览与导出”页同步生成受 200,000 字符上限约束的 Markdown 预览；正式文件进入持久 `export` job。排队 payload 冻结 expected artifact revision、citation style、source versions/fingerprint 和 review section revisions，worker 开始时全部复核后才写入以 job ID 隔离的目录。下载接口只允许读取 succeeded job result 明确列出的 basename，不接受任意路径。
+
+对 `review_outline` 导出会按提纲顺序聚合所有绑定该 current outline revision 的 current `review_section`；已生成章节使用人工/模型最新 revision 正文和结构化 citation tokens，未生成章节明确标注并保留提纲计划。Markdown/DOCX 因而提供带格式化引文、参考文献与跨提纲/章节 evidence appendix 的整稿，comparison DOCX 继续输出固定几何的比较表。
+
 HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-encoded parser 保留为列表，既不丢失多研究问题选择，也继续受 1 MB/100 字段上限约束。
 
 ## 8. JSON API

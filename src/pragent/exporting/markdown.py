@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pragent.research import DEEP_READ_FIELD_LABELS
 
-from .common import citation_output, parse_artifact_content
+from .common import citation_output, parse_artifact_content, review_drafts
 from .models import FrozenArtifactExport
 
 
@@ -30,7 +30,7 @@ def render_markdown(snapshot: FrozenArtifactExport) -> bytes:
     elif artifact_type == "comparison":
         _render_comparison(lines, snapshot, content, labels)
     elif artifact_type == "review_outline":
-        _render_outline(lines, content, labels)
+        _render_outline(lines, snapshot, content, labels)
     elif artifact_type == "review_section":
         _render_section(lines, content, labels)
     _render_references(lines, citations.bibliography)
@@ -73,14 +73,19 @@ def _render_comparison(lines, snapshot, matrix, labels) -> None:
     lines.append("")
 
 
-def _render_outline(lines, outline, labels) -> None:
+def _render_outline(lines, snapshot, outline, labels) -> None:
     lines.extend(("## 研究问题", ""))
     for question in outline.research_questions:
         lines.append(f"- {question.question}")
     lines.append("")
+    drafts = review_drafts(snapshot)
     for section in outline.sections:
         lines.extend((f"## {section.title}", "", section.objective, ""))
-        for claim in section.planned_claims:
+        draft = drafts.get(section.key)
+        claims = draft.claims if draft is not None else section.planned_claims
+        if draft is None:
+            lines.extend(("_本节尚未生成草稿；以下为提纲计划。_", ""))
+        for claim in claims:
             text = "证据不足" if claim.insufficient_evidence else claim.text
             lines.append(f"- {_with_citation(text, next(labels))}")
         lines.append("")

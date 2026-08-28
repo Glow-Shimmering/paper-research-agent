@@ -16,12 +16,14 @@ from .compare import (
 )
 from .citations import (
     STYLE_REGISTRY,
+    CitationDocument,
     CitationRenderError,
     CitationStyleError,
     CitationStyleSpec,
     get_citation_style,
     render_bibliography,
     render_citation_cluster,
+    render_citation_document,
     source_to_csl_json,
 )
 from .deep_read import (
@@ -93,12 +95,14 @@ __all__ = [
     "ComparisonSchemaError",
     "ComparisonWorkflow",
     "STYLE_REGISTRY",
+    "CitationDocument",
     "CitationRenderError",
     "CitationStyleError",
     "CitationStyleSpec",
     "get_citation_style",
     "render_bibliography",
     "render_citation_cluster",
+    "render_citation_document",
     "source_to_csl_json",
     "DEEP_READ_FIELD_LABELS",
     "DEEP_READ_FIELD_ORDER",

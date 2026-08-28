@@ -87,7 +87,11 @@ Review Web/API 从 ready、未 stale 的 comparison 自动取得来源集合，�
 
 内置 style registry 固定公开 `gb-t-7714-2015-numeric`、`apa-7`、`ieee`、`chicago-author-date` 和 `mla` 五个键。每个 CSL 文件加载时执行 schema 校验，未知样式或 processor 失败都会明确报错，不回退到另一个格式。样式来自 Citation Style Language 官方 styles 仓库，版本、原始链接和 CC BY-SA 3.0 归因随 wheel 保存在 `pragent/styles/ATTRIBUTION.md`。
 
-当前接口只负责规范化与渲染 citation cluster/bibliography；Markdown、DOCX、CSV、JSON 的 artifact renderer 从 Step 23 开始接入。
+当前导出服务先冻结 artifact 的当前 immutable revision、项目/来源版本、freshness、provider provenance 和 evidence snapshots，再以同一 frozen snapshot 生成 Markdown、DOCX、CSV 或 JSON。Markdown/DOCX 将结构化 citation tokens 交给一个共享 CSL processor context，保证数字引文与参考文献编号一致；不会把内部 token 原样泄漏进正文。
+
+JSON 包含固定 export schema version、artifact/revision/model metadata、freshness、canonical source/CSL-JSON、identities、provider records 和 evidence snapshots。CSV 总是输出可回读的来源目录，comparison 另输出 long-form matrix。DOCX 使用真实标题层级、固定表格几何、参考文献和 evidence appendix，并把 OOXML ZIP 时间归一化以获得稳定字节。
+
+落盘文件名由受限标题、artifact ID 和 revision number 组成，拒绝 renderer 提供的不安全后缀；临时文件在目标目录写完、flush/fsync 后使用 `os.replace` 原子替换。导出期间若 artifact、来源或 freshness 发生变化，冻结过程明确冲突失败，不混合两个 revision 的数据。
 
 HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-encoded parser 保留为列表，既不丢失多研究问题选择，也继续受 1 MB/100 字段上限约束。
 

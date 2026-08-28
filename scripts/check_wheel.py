@@ -77,6 +77,7 @@ import sys
 import tempfile
 import pragent
 from fastapi.testclient import TestClient
+from pragent.exporting import ArtifactExportService, safe_export_stem
 from pragent.store import Store
 from pragent.research import STYLE_REGISTRY
 from pragent.webapp import _web_directory, create_app
@@ -84,6 +85,8 @@ from pragent.webapp import _web_directory, create_app
 assert str(Path(pragent.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()))
 assert Path(_web_directory()).is_dir()
 assert len(STYLE_REGISTRY) == 5
+assert ArtifactExportService is not None
+assert safe_export_stem('CON', 'artifact:wheel', 1).startswith('research-artifact-')
 with tempfile.TemporaryDirectory() as raw:
     store = Store(Path(raw) / 'wheel.db')
     with TestClient(

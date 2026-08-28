@@ -24,6 +24,7 @@ dependencies = [
     "openai>=1.30",
     "python-dotenv>=1.0",
     "citeproc-py>=0.11,<1",
+    "python-docx>=1.1,<2",
     "textual>=0.60",
     "pyperclip>=1.8",
 ]

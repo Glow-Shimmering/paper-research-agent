@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from pragent.research import (
     CitationStyleError,
     render_bibliography,
     render_citation_cluster,
+    render_citation_document,
     source_to_csl_json,
 )
 
@@ -139,3 +141,26 @@ def test_style_registry_is_complete_licensed_and_fails_closed():
     assert "2a4430b7cadae7cc88012537c5ceaed76d1d9938" in attribution
     with pytest.raises(CitationStyleError, match="不支持"):
         render_bibliography([_source()], "invented-style")
+
+
+def test_document_renderer_keeps_numeric_clusters_and_bibliography_aligned():
+    first = _source()
+    second = replace(
+        first,
+        id="source_second",
+        canonical_key="doi:10.1234/second",
+        title="Second Evidence Source",
+        authors=("Carol Jones",),
+        doi="10.1234/second",
+        canonical_url="https://doi.org/10.1234/second",
+    )
+
+    rendered = render_citation_document(
+        [first, second],
+        [(second.id,), (first.id, second.id)],
+        "ieee",
+    )
+
+    assert rendered.citations == ("[1]", "[1], [2]")
+    assert rendered.bibliography[0].startswith("[1]C. Jones")
+    assert rendered.bibliography[1].startswith("[2]A. Chen")

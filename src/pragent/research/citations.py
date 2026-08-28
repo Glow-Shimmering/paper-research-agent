@@ -29,6 +29,12 @@ class CitationRenderError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CitationDocument:
+    citations: tuple[str, ...]
+    bibliography: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class CitationStyleSpec:
     key: str
     label: str
@@ -186,6 +192,63 @@ def render_citation_cluster(
             citation = Citation([CitationItem(item.id) for item in source_list])
             bibliography.register(citation)
             return str(bibliography.cite(citation, lambda _item: None)).strip()
+    except Exception as exc:
+        raise CitationRenderError(
+            f"引用样式 {style_key} 渲染失败：{type(exc).__name__}"
+        ) from exc
+
+
+def render_citation_document(
+    sources: Iterable[ResearchSource],
+    clusters: Iterable[Iterable[str]],
+    style_key: str,
+) -> CitationDocument:
+    """Render all clusters in one processor context so numeric labels stay aligned."""
+
+    source_list = tuple(sources)
+    ids = [item.id for item in source_list]
+    if len(ids) != len(set(ids)):
+        raise CitationRenderError("参考文献来源 ID 不能重复")
+    known_ids = set(ids)
+    cluster_ids = tuple(tuple(dict.fromkeys(items)) for items in clusters)
+    unknown = sorted(
+        {source_id for items in cluster_ids for source_id in items} - known_ids
+    )
+    if unknown:
+        raise CitationRenderError(f"引用包含未知来源：{', '.join(unknown)}")
+    spec = get_citation_style(style_key)
+    try:
+        with resources.as_file(
+            resources.files("pragent").joinpath("styles", spec.filename)
+        ) as style_path:
+            bibliography = CitationStylesBibliography(
+                CitationStylesStyle(str(style_path), validate=True),
+                CiteProcJSON([source_to_csl_json(item) for item in source_list]),
+                formatter.plain,
+            )
+            citations = [
+                Citation([CitationItem(source_id) for source_id in items])
+                for items in cluster_ids
+            ]
+            cited_ids = {source_id for items in cluster_ids for source_id in items}
+            for citation in citations:
+                bibliography.register(citation)
+            for source_id in ids:
+                if source_id not in cited_ids:
+                    bibliography.register(Citation([CitationItem(source_id)]))
+            rendered_citations = tuple(
+                str(bibliography.cite(citation, lambda _item: None)).strip()
+                if citation.cites
+                else ""
+                for citation in citations
+            )
+            rendered_bibliography = tuple(
+                "".join(str(part) for part in entry).strip()
+                for entry in bibliography.bibliography()
+            )
+            return CitationDocument(rendered_citations, rendered_bibliography)
+    except CitationStyleError:
+        raise
     except Exception as exc:
         raise CitationRenderError(
             f"引用样式 {style_key} 渲染失败：{type(exc).__name__}"

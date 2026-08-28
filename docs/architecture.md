@@ -117,6 +117,12 @@ SQLite schema v6 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 
 内置 GB/T 7714-2015、APA 7、IEEE、Chicago author-date 与 MLA 样式固定到 Citation Style Language 官方仓库提交 `2a4430b7cadae7cc88012537c5ceaed76d1d9938`，每个文件内含 CC BY-SA 3.0 rights，聚合归因也作为 package data 随 wheel 分发。golden tests 固定单条样例的 citation cluster 和 bibliography 输出；它们验证 processor/style 集成稳定性，不声称覆盖各格式全部边缘规则。
 
+### Deterministic export 边界
+
+`exporting/` 先读取 artifact current pointer，再冻结 immutable revision、canonical sources/provenance、evidence snapshots 和 freshness；结束前重复核对 artifact/source version 与 fingerprint，任何并发漂移都 fail closed。renderer 只消费冻结对象，因此同一 snapshot 的 Markdown/JSON/CSV/DOCX 不受后续 current pointer 变化影响。
+
+Markdown 与 DOCX 使用同一个文档级 CSL processor context；JSON 通过 `ExportEnvelope` schema 后按 key 排序；CSV 固定 header、row order 与 LF；DOCX 固定 core properties、OOXML ZIP entry 顺序/时间和表格 DXA geometry。文件先在目标目录写临时文件，随后 `os.replace`，安全 stem 不接受 Windows 保留名、路径分隔符或控制字符。
+
 ### 旧 Pagent 显式导入
 
 `import_pagent.py` 只接受已验证的 Pagent schema v1/v2，默认 dry-run，且从不在旧目录上运行 migration。执行导入时先建立文件 hash 清单，再通过 SQLite online backup 把包含已提交 WAL 的一致快照写入目标同盘 staging；路径重写、v6 migration、计数/外键/quick-check 和文件二次 hash 均在 staging 完成。只有全部通过后才原子重命名为目标目录，目标已存在或中途失败均 fail closed。

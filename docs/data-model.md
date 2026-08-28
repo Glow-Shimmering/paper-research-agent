@@ -74,6 +74,8 @@ Project-level `comparison` artifact 同样使用专用原子保存入口。其 c
 
 引用导出不另建一份可漂移的题录表。`ResearchSource` 在渲染边界转换为 CSL-JSON：`id` 保持内部 source ID，paper/web 分别映射为学术条目或 `webpage`，已有 canonical 字段和 provider metadata 映射到 CSL 的 author/issued/DOI/URL/container-title/volume/issue/page/publisher/language；缺失字段不推断。网页的 `fetched_at` 仅作为 `accessed` 日期。这样 artifact revision、evidence link 与参考文献始终通过同一 source ID 关联。
 
+`FrozenArtifactExport` 不是新持久表，而是一次导出的只读快照：包含 current `ArtifactRevision`、当时的 project/artifact/source version、`ArtifactFreshness`、按 artifact content 排序的 sources/identities/provider records，以及按 evidence link 稳定排序的 evidence snapshots。JSON envelope 的 `schema_version` 描述导出合同，revision 自身的 `schema_version` 继续描述 artifact content，两者不能混用。
+
 ## Notes
 
 `research_notes.scope_kind` 明确限定三种范围：

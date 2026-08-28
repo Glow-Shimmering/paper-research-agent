@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}文献综述 · {{ project.title }}{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}">← 返回项目</a></p>
+<section class="hero"><div><p class="eyebrow">Evidence review</p><h1>文献综述</h1><p>从当前比较矩阵生成证据约束的提纲，再逐节生成可审计草稿。</p></div></section>
+<section class="panel">
+  <div class="section-heading"><h2>新建综述提纲</h2><span>只使用当前项目来源</span></div>
+  <form class="stack-form" method="post" hx-post="/ui/projects/{{ project.id }}/reviews" hx-target="#review-action" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>标题<input name="title" maxlength="200" value="文献综述提纲" required></label>
+    <fieldset class="comparison-source-picker"><legend>研究问题</legend>{% for question in questions %}<label class="check"><input type="checkbox" name="question_ids" value="{{ question.id }}">{{ question.question }}</label>{% else %}<p class="empty">请先添加研究问题。</p>{% endfor %}</fieldset>
+    <label>比较矩阵<select name="comparison_artifact_id" required><option value="">请选择</option>{% for item in comparisons %}<option value="{{ item.id }}">{{ item.title }} · revision {{ item.current_revision_number }}</option>{% endfor %}</select></label>
+    <button type="submit">生成综述提纲</button>
+  </form>
+  <div id="review-action" aria-live="polite"></div>
+</section>
+<section class="panel"><div class="section-heading"><h2>已有提纲</h2><span>{{ outlines|length }} 项</span></div><div class="history-list">{% for item in outlines %}<a href="/ui/projects/{{ project.id }}/reviews/{{ item.id }}">{{ item.title }} · revision {{ item.current_revision_number }}</a>{% else %}<p class="empty">尚无综述提纲</p>{% endfor %}</div></section>
+{% endblock %}

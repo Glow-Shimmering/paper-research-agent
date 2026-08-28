@@ -1,0 +1,21 @@
+<div id="review-state">
+<section class="hero"><div><p class="eyebrow">Review outline</p><h1>{{ outline.title }}</h1><p>revision {{ revision.revision_number }} · {{ outline.sections|length }} 个章节</p></div></section>
+{% if freshness.stale or derived_stale %}<div class="action-message failure">研究问题、比较矩阵或项目来源已变化；历史可读，但请重新生成后再继续写作。</div>{% endif %}
+<div class="review-layout">
+<section class="stack">
+{% for section in outline.sections %}
+  {% set saved = drafts.get(section.key) %}
+  <article class="panel review-section">
+    <div class="section-heading"><h2>{{ loop.index }}. {{ section.title }}</h2><span>{{ section.source_ids|length }} 个来源</span></div>
+    <p>{{ section.objective }}</p>
+    <details><summary>调整提纲</summary><form class="stack-form" method="post" hx-post="/ui/projects/{{ project.id }}/reviews/{{ artifact.id }}/sections/{{ section.key }}/edit" hx-target="#review-state" hx-swap="outerHTML"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="expected_artifact_version" value="{{ artifact.version }}"><label>章节标题<input name="title" value="{{ section.title }}" maxlength="200" required></label><label>章节目标<textarea name="objective" maxlength="2000" required>{{ section.objective }}</textarea></label><button type="submit">保存提纲 revision</button></form></details>
+    {% if not derived_stale and not freshness.stale %}<form method="post" hx-post="/ui/projects/{{ project.id }}/reviews/{{ artifact.id }}/sections/{{ section.key }}/drafts" hx-target="#section-action-{{ section.key }}" hx-swap="innerHTML"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">{% if saved %}重新生成本节{% else %}生成本节草稿{% endif %}</button></form>{% endif %}
+    <div id="section-action-{{ section.key }}"></div>
+    {% if saved %}<div class="review-draft"><h3>章节草稿 · revision {{ saved.revision.revision_number }}</h3>{% for claim in saved.draft.claims %}<article class="review-claim"><p>{{ claim.text }}</p><span class="badge {% if claim.insufficient_evidence %}status failed{% else %}status ready{% endif %}">{% if claim.insufficient_evidence %}证据不足{% else %}引用 {{ claim.citation_tokens|length }} 条{% endif %}</span>{% if claim.citation_tokens %}<button class="secondary compact" hx-get="/ui/projects/{{ project.id }}/review-sections/{{ saved.artifact.id }}/revisions/{{ saved.revision.id }}/claims/{{ claim.key }}/evidence" hx-target="#claim-evidence-{{ saved.artifact.id }}-{{ claim.key }}" hx-swap="innerHTML">检查证据</button><div id="claim-evidence-{{ saved.artifact.id }}-{{ claim.key }}"></div>{% endif %}</article>{% endfor %}</div>{% else %}<p class="empty">本节尚未生成草稿。</p>{% endif %}
+  </article>
+{% endfor %}
+</section>
+<aside class="panel review-preview"><div class="section-heading"><h2>整稿预览</h2><span>当前 revision</span></div>{% for section in outline.sections %}{% set saved = drafts.get(section.key) %}<h3>{{ loop.index }}. {{ section.title }}</h3>{% if saved %}{% for claim in saved.draft.claims %}<p>{{ claim.text }} {% for token in claim.citation_tokens %}<code>[{{ token.source_id }}:{{ token.evidence_id }}]</code>{% endfor %}{% if claim.insufficient_evidence %}<strong>［证据不足］</strong>{% endif %}</p>{% endfor %}{% else %}<p class="muted">尚无草稿</p>{% endif %}{% endfor %}</aside>
+</div>
+<section class="panel"><div class="section-heading"><h2>提纲版本历史</h2><span>{{ history|length }} 个 revision</span></div><div class="history-list">{% for item in history %}<span>revision {{ item.revision_number }} · {{ item.created_by }} · {{ item.created_at }}</span>{% endfor %}</div></section>
+</div>

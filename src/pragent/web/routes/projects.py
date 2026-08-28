@@ -459,7 +459,16 @@ def _render_error(
     )
 
 
-async def _validated_form(request: Request) -> dict[str, str]:
+class _ValidatedForm(dict[str, str]):
+    def __init__(self, parsed: dict[str, list[str]]) -> None:
+        super().__init__({key: values[-1] for key, values in parsed.items() if values})
+        self._parsed = parsed
+
+    def getlist(self, key: str) -> list[str]:
+        return list(self._parsed.get(key, ()))
+
+
+async def _validated_form(request: Request) -> _ValidatedForm:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != "application/x-www-form-urlencoded":
         raise HTTPException(status_code=415, detail="只接受 URL-encoded form")
@@ -476,7 +485,7 @@ async def _validated_form(request: Request) -> dict[str, str]:
         )
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="表单编码无效") from exc
-    form = {key: values[-1] for key, values in parsed.items() if values}
+    form = _ValidatedForm(parsed)
     cookie = request.cookies.get(_CSRF_COOKIE, "")
     supplied = form.get("csrf_token", "")
     if (

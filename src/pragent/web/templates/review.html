@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ outline.title }} · PRAgent{% endblock %}
+{% block content %}
+<p><a class="back" href="/ui/projects/{{ project.id }}/reviews">← 返回文献综述</a></p>
+{% include "fragments/review_state.html" %}
+{% endblock %}

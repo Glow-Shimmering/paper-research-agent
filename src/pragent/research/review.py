@@ -347,12 +347,82 @@ class ReviewOutlineArtifactService:
             title=str(title).strip() or "文献综述提纲",
             status="generating",
         )
-        fingerprint = self.repository.project_source_fingerprint(project_id)
         draft = workflow.generate(
             project_id, question_ids, source_ids, comparison_artifact_id
         )
+        return self._save(
+            artifact,
+            draft.outline,
+            expected_artifact_version=artifact.version,
+            created_by="model",
+            model=draft.model,
+            usage=draft.usage,
+            finish_reason=draft.finish_reason,
+            prompt_version=draft.prompt_version,
+            schema_version=draft.schema_version,
+        )
+
+    def edit_section(
+        self,
+        project_id: str,
+        artifact_id: str,
+        section_key: str,
+        *,
+        title: str,
+        objective: str,
+        expected_artifact_version: int,
+    ) -> SavedReviewOutline:
+        artifact = self.repository.get_artifact(artifact_id)
+        if (
+            artifact is None
+            or artifact.project_id != project_id
+            or artifact.artifact_type != "review_outline"
+            or artifact.source_id is not None
+        ):
+            raise KeyError("综述提纲不存在")
+        if artifact.version != expected_artifact_version:
+            raise RecordVersionConflictError(f"研究 artifact {artifact_id} 版本冲突")
+        if self.repository.artifact_freshness(artifact.id).stale:
+            raise ValueError("项目来源已变化，请重新生成综述提纲")
+        revision = self.repository.get_current_artifact_revision(artifact.id)
+        if revision is None:
+            raise ValueError("综述提纲尚无 revision")
+        outline = ReviewOutline.model_validate(revision.content).model_copy(deep=True)
+        section = next(
+            (item for item in outline.sections if item.key == section_key), None
+        )
+        if section is None:
+            raise KeyError("综述提纲 section 不存在")
+        section.title = str(title).strip()
+        section.objective = str(objective).strip()
+        outline = ReviewOutline.model_validate(outline.model_dump(mode="json"))
+        return self._save(
+            artifact,
+            outline,
+            expected_artifact_version=expected_artifact_version,
+            created_by="user",
+            model=None,
+            usage={"llm_calls": 0, "operation": "section_edit"},
+            finish_reason=None,
+            prompt_version="review-outline-user-edit-v1",
+            schema_version=REVIEW_OUTLINE_SCHEMA_VERSION,
+        )
+
+    def _save(
+        self,
+        artifact: ResearchArtifact,
+        outline: ReviewOutline,
+        *,
+        expected_artifact_version: int,
+        created_by: str,
+        model: Optional[str],
+        usage: dict[str, Any],
+        finish_reason: Optional[str],
+        prompt_version: str,
+        schema_version: int,
+    ) -> SavedReviewOutline:
         refs = []
-        for section in draft.outline.sections:
+        for section in outline.sections:
             for claim_index, claim in enumerate(section.planned_claims):
                 field_path = f"$.sections.{section.key}.claims.{claim_index}"
                 for ordinal, ref in enumerate(claim.evidence_refs):
@@ -367,23 +437,25 @@ class ReviewOutlineArtifactService:
                     )
         revision = self.repository.append_validated_review_outline_revision(
             artifact.id,
-            draft.outline.model_dump(mode="json"),
-            expected_artifact_version=artifact.version,
-            expected_project_fingerprint=fingerprint,
+            outline.model_dump(mode="json"),
+            expected_artifact_version=expected_artifact_version,
+            expected_project_fingerprint=self.repository.project_source_fingerprint(
+                artifact.project_id
+            ),
             question_snapshots=[
                 (item.id, item.version, item.question)
-                for item in draft.outline.research_questions
+                for item in outline.research_questions
             ],
-            selected_source_ids=draft.outline.source_ids,
-            comparison_artifact_id=draft.outline.comparison_artifact_id,
-            comparison_revision_id=draft.outline.comparison_revision_id,
+            selected_source_ids=outline.source_ids,
+            comparison_artifact_id=outline.comparison_artifact_id,
+            comparison_revision_id=outline.comparison_revision_id,
             evidence_refs=refs,
-            created_by="model",
-            model=draft.model,
-            usage=draft.usage,
-            finish_reason=draft.finish_reason,
-            prompt_version=draft.prompt_version,
-            schema_version=draft.schema_version,
+            created_by=created_by,
+            model=model,
+            usage=usage,
+            finish_reason=finish_reason,
+            prompt_version=prompt_version,
+            schema_version=schema_version,
         )
         updated = self.repository.get_artifact(artifact.id)
         if updated is None:  # pragma: no cover

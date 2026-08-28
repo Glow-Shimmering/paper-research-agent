@@ -1,6 +1,6 @@
 # PRAgent 产品工作流
 
-本文记录当前已实现的 Phase 2–4 Web 工作流、Step 17–18 比较工作流和 Step 19 综述提纲后端；综述 UI、章节草稿与导出仍属于后续 Step，不在这里提前宣称可用。
+本文记录当前已实现的 Phase 2–5 研究工作流；导出仍属于后续 Step，不在这里提前宣称可用。
 
 ## 1. 创建研究项目
 
@@ -77,7 +77,11 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 
 `review_section` workflow 只接受当前 ready、未 stale 的 review outline 及其中一个 section。章节正文是有序 claim 列表；每条 claim 使用结构化 `source_id + evidence_id + exact quote` citation tokens，或者显式 `insufficient_evidence`。模型返回后再次检查 outline revision/freshness，随后保存事务把 token 限制在该 section planned claims 的证据集合，并再次验证来源、chunk/hash 与 quote。
 
-章节人工编辑以 artifact version CAS 追加 `created_by=user` revision；默认保留原 citation tokens，也可以显式切换为证据不足并同时清空 refs/links。章节生成已注册为持久 `review_section` worker job；确定性正文/引用渲染和交互页面分别由后续导出与 Step 21 完成。
+章节人工编辑以 artifact version CAS 追加 `created_by=user` revision；默认保留原 citation tokens，也可以显式切换为证据不足并同时清空 refs/links。章节生成已注册为持久 `review_section` worker job；交互页面已完成，确定性正文/引用导出由后续阶段完成。
+
+Review Web/API 从 ready、未 stale 的 comparison 自动取得来源集合，用户不能在提纲或章节请求中静默加入项目外论文。页面支持多研究问题选择、提纲章节标题/目标调整、逐节生成与显式重试、claim evidence drawer、提纲 revision 历史和当前章节的整稿预览。提纲或绑定问题/比较/来源漂移后页面只保留历史读取，禁止继续派生章节。
+
+HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-encoded parser 保留为列表，既不丢失多研究问题选择，也继续受 1 MB/100 字段上限约束。
 
 ## 8. JSON API
 

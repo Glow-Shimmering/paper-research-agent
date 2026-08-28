@@ -308,7 +308,11 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
   - 校验：LLM 输出只可复用 section planned claims 的 token，最多一次 repair；生成后复查 outline revision/freshness，保存事务再次验证 outline 当前性、project fingerprint、来源、chunk/hash 与 quote。
   - 编辑：artifact version CAS 追加 user revision；默认保留 citations，显式证据不足时同步清空 tokens/links；已接入持久 `review_section` worker。
   - 验证：`tests/test_review.py` 共 12 个 outline/section 合同测试；Windows 完整回归 `369 passed, 1 skipped`，临时目录 85 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check 全部通过。
-- [ ] Step 21：实现 Review UI：提纲调整、逐节生成/重试、证据检查、整稿预览；不允许模型静默添加项目外论文。
+- [x] Step 21：实现 Review UI：提纲调整、逐节生成/重试、证据检查、整稿预览；不允许模型静默添加项目外论文。
+  - 创建：从当前 ready comparison 派生来源，只接受当前项目研究问题；outline/section 都以 fingerprint、绑定 revision 和生成序号构造幂等 job。
+  - 交互：支持提纲标题/目标调整并追加 revision、逐节生成与重试、claim evidence drawer、提纲历史和当前章节整稿预览；派生输入 stale 时停止新写入。
+  - 安全：所有 HTMX 写入验证 CSRF；多值 checkbox 由有界 URL-encoded parser 保留；公开 evidence 不返回主机路径，模型输入无项目外来源入口。
+  - 验证：`tests/test_review.py` 13 个 outline/section/Web 合同测试；Windows 完整回归 `370 passed, 1 skipped`，临时目录 85 MB。
 
 **Gate：** 选 3 篇真实论文可生成对比矩阵、综述提纲和至少一节草稿；所有引用均映射到项目来源和 evidence，证据不足明确显示。
 

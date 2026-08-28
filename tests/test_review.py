@@ -1,5 +1,6 @@
 import json
 import time
+from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
@@ -153,6 +154,23 @@ class ScriptedSectionLLM:
                 "response_id": f"section-{len(self.calls)}",
             },
         }
+
+
+class ScriptedReviewProductLLM:
+    model = "scripted-review-product"
+    is_configured = True
+
+    def __init__(self):
+        self.outline = ScriptedReviewLLM()
+        self.section = ScriptedSectionLLM()
+
+    def chat_with_metadata(self, system, user):
+        delegate = self.section if "综述写作助手" in system else self.outline
+        result = delegate.chat_with_metadata(system, user)
+        result["metadata"]["response_id"] = "product-" + result["metadata"][
+            "response_id"
+        ]
+        return result
 
 
 def _card(evidence_id):
@@ -663,6 +681,98 @@ def test_review_section_runs_through_persistent_worker(tmp_path):
     assert current.status == "succeeded"
     artifact = repository.get_artifact(current.result["artifact_id"])
     assert artifact is not None and artifact.artifact_type == "review_section"
+    jobs.close()
+    repository.close()
+    store.close()
+
+
+def test_review_api_ui_outline_edit_section_preview_and_evidence(tmp_path):
+    store, repository, project, question, source_ids, comparison = _seed(tmp_path)
+    second_question = repository.create_question(
+        project.id, "实验结果的适用边界是什么？"
+    )
+    jobs = JobRepository(store.db_path)
+    app = create_app(
+        store=store,
+        research_repository=repository,
+        job_repository=jobs,
+        llm=ScriptedReviewProductLLM(),
+        job_worker_count=1,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        listing = client.get(f"/ui/projects/{project.id}/reviews")
+        assert listing.status_code == 200
+        assert "文献综述" in listing.text and "新建综述提纲" in listing.text
+        csrf = client.cookies.get("pra_csrf")
+        ui_created = client.post(
+            f"/ui/projects/{project.id}/reviews",
+            content=urlencode(
+                [
+                    ("csrf_token", csrf),
+                    ("title", "Web 综述"),
+                    ("question_ids", question.id),
+                    ("question_ids", second_question.id),
+                    ("comparison_artifact_id", comparison.artifact.id),
+                ]
+            ),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+        assert ui_created.status_code == 200
+        job_id = ui_created.text.split("/jobs/", 1)[1].split('"', 1)[0]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = client.get(
+                f"/api/v1/projects/{project.id}/jobs/{job_id}"
+            ).json()
+            if job["terminal"]:
+                break
+            time.sleep(0.02)
+        assert job["status"] == "succeeded"
+        outline_id = jobs.get(job_id).result["artifact_id"]
+        detail = client.get(
+            f"/api/v1/projects/{project.id}/review-outlines/{outline_id}"
+        ).json()
+        assert len(detail["outline"]["research_questions"]) == 2
+
+        edited = client.patch(
+            f"/api/v1/projects/{project.id}/review-outlines/{outline_id}/sections/methods",
+            json={
+                "expected_artifact_version": detail["artifact"]["version"],
+                "title": "人工调整的方法章节",
+                "objective": "人工调整后的目标",
+            },
+        )
+        assert edited.status_code == 200
+        assert edited.json()["outline"]["sections"][0]["title"] == "人工调整的方法章节"
+
+        section_job = client.post(
+            f"/api/v1/projects/{project.id}/review-outlines/{outline_id}/sections/methods/drafts"
+        )
+        assert section_job.status_code == 202
+        section_job_id = section_job.json()["job"]["id"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            current = client.get(
+                f"/api/v1/projects/{project.id}/jobs/{section_job_id}"
+            ).json()
+            if current["terminal"]:
+                break
+            time.sleep(0.02)
+        assert current["status"] == "succeeded"
+        page = client.get(f"/ui/projects/{project.id}/reviews/{outline_id}")
+        assert page.status_code == 200
+        assert "整稿预览" in page.text
+        assert "两篇论文采用了可比较但边界不同的方法设计" in page.text
+        section_artifact_id = jobs.get(section_job_id).result["artifact_id"]
+        section_revision_id = jobs.get(section_job_id).result["revision_id"]
+        evidence = client.get(
+            f"/api/v1/projects/{project.id}/review-sections/{section_artifact_id}/revisions/{section_revision_id}/claims/method_synthesis/evidence"
+        )
+        assert evidence.status_code == 200
+        assert len(evidence.json()["items"]) == 2
+        assert all(item["quote"] == QUOTE for item in evidence.json()["items"])
+
     jobs.close()
     repository.close()
     store.close()

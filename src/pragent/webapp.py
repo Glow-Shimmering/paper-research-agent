@@ -737,7 +737,13 @@ def create_app(
 
         return await run_in_threadpool(reindex_locked)
 
-    register_agent_api(app, store_factory=_store, embedder_factory=_embedder, llm_factory=_llm)
+    register_agent_api(
+        app,
+        store_factory=_store,
+        embedder_factory=_embedder,
+        llm_factory=_llm,
+        repository_factory=_research_repository,
+    )
     register_project_routes(
         app,
         store_factory=_store,

@@ -38,6 +38,8 @@ class ToolContext:
     embedder: Any
     llm: Any
     session_id: Optional[str] = None
+    project_id: Optional[str] = None
+    research_repository: Any = None
     require_confirmation: bool = True
     pending_action: Optional[PendingAction | tuple[str, dict]] = None
     last_confirmed_action: Optional[ConfirmedAction] = None
@@ -633,6 +635,103 @@ def _list_evidence(ctx: ToolContext, limit: int = 20) -> ToolResult:
     return ToolResult.success(data=data, message=message, evidence_ids=evidence_ids)
 
 
+def _project_repository(ctx: ToolContext) -> tuple[Optional[str], Any, Optional[ToolResult]]:
+    project_id = str(ctx.project_id or "").strip()
+    repository = ctx.research_repository
+    if not project_id or repository is None:
+        return None, None, ToolResult.error(
+            "project_context_required",
+            "当前 Agent session 未绑定研究项目，不能读取项目资料。",
+        )
+    return project_id, repository, None
+
+
+def _list_project_sources(ctx: ToolContext, limit: int = 50) -> ToolResult:
+    project_id, repository, error = _project_repository(ctx)
+    if error is not None:
+        return error
+    page = repository.list_project_sources(project_id, limit=limit)
+    data = []
+    for membership in page.items:
+        source = membership.source
+        data.append(
+            {
+                "source_id": source.id,
+                "source_kind": source.source_kind,
+                "title": source.title,
+                "authors": list(source.authors),
+                "year": source.year,
+                "doi": source.doi,
+                "arxiv_id": source.arxiv_id,
+                "canonical_url": source.canonical_url,
+                "status": source.status,
+                "position": membership.position,
+                "note": membership.note,
+            }
+        )
+    return ToolResult.success(data={"total": page.total, "items": data})
+
+
+def _list_project_artifacts(ctx: ToolContext, limit: int = 50) -> ToolResult:
+    project_id, repository, error = _project_repository(ctx)
+    if error is not None:
+        return error
+    page = repository.list_artifacts(project_id, limit=limit)
+    items = []
+    for artifact in page.items:
+        revision = repository.get_current_artifact_revision(artifact.id)
+        freshness = repository.artifact_freshness(artifact.id)
+        items.append(
+            {
+                "artifact_id": artifact.id,
+                "source_id": artifact.source_id,
+                "artifact_type": artifact.artifact_type,
+                "title": artifact.title,
+                "status": artifact.status,
+                "current_revision_number": artifact.current_revision_number,
+                "revision_id": revision.id if revision else None,
+                "stale": freshness.stale,
+                "stale_reason": freshness.reason,
+                "model": revision.model if revision else None,
+                "prompt_version": revision.prompt_version if revision else None,
+                "updated_at": artifact.updated_at,
+            }
+        )
+    return ToolResult.success(data={"total": page.total, "items": items})
+
+
+def _list_project_evidence(ctx: ToolContext, limit: int = 50) -> ToolResult:
+    project_id, repository, error = _project_repository(ctx)
+    if error is not None:
+        return error
+    artifacts = repository.list_artifacts(project_id, limit=200).items
+    linked_ids: list[str] = []
+    seen: set[str] = set()
+    for artifact in artifacts:
+        revision = repository.get_current_artifact_revision(artifact.id)
+        if revision is None:
+            continue
+        for link in repository.list_artifact_evidence(revision.id):
+            if link.evidence_id not in seen:
+                linked_ids.append(link.evidence_id)
+                seen.add(link.evidence_id)
+            if len(linked_ids) >= limit:
+                break
+        if len(linked_ids) >= limit:
+            break
+    evidence_items = [ctx.store.get_evidence(item_id) for item_id in linked_ids]
+    evidence_items = [item for item in evidence_items if item is not None]
+    data = [_evidence_to_dict(item) for item in evidence_items]
+    current_ids = tuple(
+        item_id
+        for item in evidence_items
+        if not bool(_value(item, "stale", default=False))
+        for item_id in (_evidence_id(item),)
+        if item_id is not None
+    )
+    return ToolResult.success(data=data, evidence_ids=current_ids)
+
+
 def _sha256_file(path: Path) -> str:
     """计算磁盘论文的内容哈希，确保页面文本与索引证据属于同一版本。"""
     digest = hashlib.sha256()
@@ -1012,7 +1111,46 @@ _DEEP_READING_SPECS = (
     ),
 )
 
-for _spec in _DEEP_READING_SPECS:
+_PROJECT_READING_SPECS = (
+    ToolSpec(
+        name="list_project_sources",
+        description="列出当前 Agent session 所绑定研究项目的来源元数据。",
+        parameters={
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        },
+        handler=_list_project_sources,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=10.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="list_project_artifacts",
+        description="列出当前研究项目的 artifact、当前 revision 与新鲜度。",
+        parameters={
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        },
+        handler=_list_project_artifacts,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=10.0,
+        idempotent=True,
+    ),
+    ToolSpec(
+        name="list_project_evidence",
+        description="列出当前研究项目最新 artifact revision 所引用的证据。",
+        parameters={
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        },
+        handler=_list_project_evidence,
+        effects=frozenset({ToolEffect.READ_LOCAL}),
+        timeout_seconds=10.0,
+        idempotent=True,
+    ),
+)
+
+for _spec in (*_DEEP_READING_SPECS, *_PROJECT_READING_SPECS):
     register_tool(_spec)
 
 

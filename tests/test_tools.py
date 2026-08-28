@@ -5,6 +5,7 @@ import logging
 import pytest
 
 from pragent.store import Store
+from pragent.storage.research_repository import ResearchRepository
 from pragent.tool_protocol import ToolEffect, ToolResult, ToolSpec, ToolValidationError
 from pragent.tools import (
     CONFIRMATION_TOOLS,
@@ -57,6 +58,7 @@ def test_tools_schema_complete():
         "library_status", "save_note", "list_notes",
         "search_within_paper", "get_paper_outline", "read_pages",
         "read_chunk_context", "pin_evidence", "get_evidence", "list_evidence",
+        "list_project_sources", "list_project_artifacts", "list_project_evidence",
     }
     for t in TOOLS:
         assert t["type"] == "function"
@@ -82,8 +84,48 @@ def test_tool_effect_sets_are_derived_from_specs():
     assert CONFIRMATION_TOOLS == MUTATING_TOOLS | EXTERNAL_TOOLS
     assert tools_module._REGISTRY["save_note"].idempotent is False
     assert tools_module._REGISTRY["download_paper"].timeout_seconds == 180.0
+    assert {
+        "list_project_sources", "list_project_artifacts", "list_project_evidence"
+    }.isdisjoint(CONFIRMATION_TOOLS)
     structured = ToolResult.success(data={"ok": True})
     assert structured.to_model_text() == structured.to_text()
+
+
+def test_project_read_tools_are_bound_to_session_project(tmp_path):
+    database = tmp_path / "project-tools.db"
+    store = Store(database)
+    repository = ResearchRepository(database)
+    project = repository.create_project("Agent 项目")
+    source = repository.create_source(
+        "url:https://example.org/paper",
+        "web",
+        title="项目论文",
+        authors=["Alice"],
+        canonical_url="https://example.org/paper",
+        status="ready",
+    )
+    repository.add_project_source(project.id, source.id)
+    artifact = repository.create_artifact(project.id, "review_outline", title="综述提纲")
+    ctx = ToolContext(
+        store=store,
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(),
+        session_id="session-project",
+        project_id=project.id,
+        research_repository=repository,
+    )
+
+    sources = execute_tool_result("list_project_sources", {"limit": 10}, ctx)
+    assert sources.ok and sources.data["items"][0]["source_id"] == source.id
+    assert "snapshot_path" not in sources.to_model_text()
+    artifacts = execute_tool_result("list_project_artifacts", {"limit": 10}, ctx)
+    assert artifacts.ok and artifacts.data["items"][0]["artifact_id"] == artifact.id
+    evidence = execute_tool_result("list_project_evidence", {"limit": 10}, ctx)
+    assert evidence.ok and evidence.data == []
+
+    unbound = ToolContext(store=store, embedder=FakeEmbedder(), llm=FakeLLM())
+    denied = execute_tool_result("list_project_sources", {}, unbound)
+    assert denied.code == "project_context_required"
 
 
 def test_local_search(tmp_path):

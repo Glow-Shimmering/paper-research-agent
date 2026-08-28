@@ -13,9 +13,8 @@
 - ``{"type": "run", "run_id": ...}``
 - ``{"type": "complete", "status": ..., "error": ...}``（终态或等待确认）
 
-会话的闭合 transcript 由 Store 持久化，进程内仅保留最多 64 个热会话。
-等待确认的未闭合 tool 协议不会写入可恢复 transcript；run 与事件仍可
-通过审计侧栏查询。
+会话、project 绑定、完整 transcript 与冻结的待确认票据由 Store 原子持久化；
+进程内仅保留最多 64 个热会话。服务重启后仍可安全地确认或取消同一动作。
 """
 import asyncio
 import json
@@ -28,6 +27,7 @@ from fastapi import HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from .chat import cancel_pending_run, chat_turn
+from .tool_protocol import PendingAction
 from .tools import ToolContext, confirm_pending_action, pending_action_description
 
 _SESSION_CAP = 64
@@ -39,7 +39,18 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 class WebAgentSession:
-    def __init__(self, session_id: str, store, embedder, llm, *, messages=None):
+    def __init__(
+        self,
+        session_id: str,
+        store,
+        embedder,
+        llm,
+        *,
+        messages=None,
+        project_id=None,
+        research_repository=None,
+        pending_action=None,
+    ):
         self.id = session_id
         self.messages: list[dict] = list(messages or [])
         self.ctx = ToolContext(
@@ -47,6 +58,9 @@ class WebAgentSession:
             embedder=embedder,
             llm=llm,
             session_id=session_id,
+            project_id=project_id,
+            research_repository=research_repository,
+            pending_action=pending_action,
         )
         self.lock = threading.Lock()
         self.last_active = time.time()
@@ -56,13 +70,15 @@ class WebAgentSession:
 class _SessionRegistry:
     """会话注册表；store/embedder/llm 单例惰性创建。"""
 
-    def __init__(self, store_factory, embedder_factory, llm_factory):
+    def __init__(self, store_factory, embedder_factory, llm_factory, repository_factory=None):
         self._store_factory = store_factory
         self._embedder_factory = embedder_factory
         self._llm_factory = llm_factory
+        self._repository_factory = repository_factory
         self._store = None
         self._embedder = None
         self._llm = None
+        self._repository = None
         self._sessions: OrderedDict[str, WebAgentSession] = OrderedDict()
         self._lock = threading.Lock()
 
@@ -78,22 +94,64 @@ class _SessionRegistry:
             self._llm = self._llm_factory()
         return self._embedder, self._llm
 
-    def get(self, session_id: str) -> WebAgentSession:
+    @property
+    def repository(self):
+        if self._repository is None and self._repository_factory is not None:
+            self._repository = self._repository_factory()
+        return self._repository
+
+    @staticmethod
+    def _restore_pending(raw: Optional[dict]) -> Optional[PendingAction]:
+        if raw is None:
+            return None
+        pending = PendingAction(
+            name=str(raw.get("name") or ""),
+            args=dict(raw.get("args") or {}),
+            action_id=str(raw.get("action_id") or ""),
+            digest=str(raw.get("digest") or ""),
+            tool_call_id=str(raw.get("tool_call_id") or "") or None,
+            run_id=str(raw.get("run_id") or "") or None,
+        )
+        return pending if pending.is_bound() else None
+
+    def get(self, session_id: str, *, project_id: Optional[str] = None) -> WebAgentSession:
         with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
+                state = self.store.load_agent_session_state(session_id)
+                if state is None:
+                    state = self.store.ensure_agent_session(
+                        session_id, project_id=project_id
+                    )
+                    state["messages"] = []
+                    state["pending_action"] = None
+                elif project_id is not None and state.get("project_id") != project_id:
+                    raise ValueError("Agent session 已绑定其他 project")
                 embedder, llm = self._dependencies()
+                pending = self._restore_pending(state.get("pending_action"))
+                if state.get("pending_action") is not None and pending is None:
+                    self.store.resolve_pending_action(
+                        str(state["pending_action"].get("action_id") or ""), "expired",
+                        error="持久化确认票据摘要不匹配",
+                    )
                 session = WebAgentSession(
                     session_id,
                     self.store,
                     embedder,
                     llm,
-                    messages=self.store.load_agent_messages(session_id),
+                    messages=state.get("messages") or [],
+                    project_id=state.get("project_id"),
+                    research_repository=self.repository,
+                    pending_action=pending,
                 )
+                if pending is not None:
+                    session.run_id = pending.run_id
                 self._sessions[session_id] = session
                 while len(self._sessions) > _SESSION_CAP:
                     self._sessions.popitem(last=False)
             else:
+                if project_id is not None and session.ctx.project_id != project_id:
+                    raise ValueError("Agent session 已绑定其他 project")
                 self._sessions.move_to_end(session_id)
             session.last_active = time.time()
             return session
@@ -101,6 +159,14 @@ class _SessionRegistry:
     def find(self, session_id: str) -> Optional[WebAgentSession]:
         with self._lock:
             return self._sessions.get(session_id)
+
+    def find_or_restore(self, session_id: str) -> Optional[WebAgentSession]:
+        session = self.find(session_id)
+        if session is not None:
+            return session
+        if self.store.load_agent_session_state(session_id) is None:
+            return None
+        return self.get(session_id)
 
     def discard(
         self,
@@ -128,6 +194,55 @@ def _run_dict(run: Any) -> dict:
         "error": getattr(run, "error", None),
         "created_at": getattr(run, "created_at", None),
         "updated_at": getattr(run, "updated_at", None),
+        "project_id": getattr(run, "project_id", None),
+        "session_id": getattr(run, "session_id", None),
+    }
+
+
+def _history_events(messages: list[dict]) -> list[dict]:
+    """把模型 transcript 投影为可安全重绘的有限 UI 卡片。"""
+
+    calls: dict[str, tuple[str, dict]] = {}
+    events: list[dict] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "user":
+            events.append({"type": "message", "role": "user", "content": str(message.get("content") or "")})
+        elif role == "assistant":
+            content = str(message.get("content") or "")
+            if content:
+                events.append({"type": "message", "role": "assistant", "content": content})
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    args = {}
+                calls[str(call.get("id") or "")] = (str(function.get("name") or ""), args)
+        elif role == "tool":
+            name, args = calls.get(str(message.get("tool_call_id") or ""), ("tool", {}))
+            events.append(
+                {
+                    "type": "tool",
+                    "name": name,
+                    "args": args,
+                    "result": str(message.get("content") or "")[:_MAX_TOOL_RESULT_CHARS],
+                    "code": "restored",
+                }
+            )
+    return events
+
+
+def _pending_event(session: WebAgentSession) -> Optional[dict]:
+    pending = getattr(session.ctx, "pending_action", None)
+    if pending is None:
+        return None
+    return {
+        "type": "pending",
+        "name": pending.name,
+        "summary": pending_action_description(session.ctx, include_local_paths=False),
+        "digest": pending.digest,
+        "action_id": pending.action_id,
     }
 
 
@@ -207,22 +322,36 @@ def _finalize_turn(
     emit(None)
 
 
-def _persist_closed_transcript(
+def _persist_session_state(
     session: WebAgentSession,
     emit: Callable[[Optional[dict]], None],
 ) -> bool:
-    """仅保存没有未决 tool call 的 transcript，并把持久化故障显式呈现。"""
+    """原子保存 transcript 与待确认票据，并把故障显式呈现。"""
 
-    if getattr(session.ctx, "pending_action", None) is not None:
-        return False
+    pending = getattr(session.ctx, "pending_action", None)
+    pending_payload = None
+    if pending is not None:
+        pending_payload = {
+            "name": pending.name,
+            "args": pending.args,
+            "action_id": pending.action_id,
+            "digest": pending.digest,
+            "tool_call_id": pending.tool_call_id,
+            "run_id": pending.run_id,
+        }
     try:
-        session.ctx.store.save_agent_messages(session.id, session.messages)
+        session.ctx.store.save_agent_session_state(
+            session.id,
+            session.messages,
+            project_id=session.ctx.project_id,
+            pending_action=pending_payload,
+        )
     except Exception:
         emit(
             {
                 "type": "error",
-                "message": "本轮已完成，但会话历史保存失败；服务重启后可能无法恢复。",
-                "code": "transcript_save_failed",
+                "message": "会话状态保存失败；为避免重复操作，请勿确认并检查服务日志。",
+                "code": "session_state_save_failed",
             }
         )
         return False
@@ -265,7 +394,7 @@ def _run_turn(
             emit(None)
             return
         session.messages = new_messages
-        _persist_closed_transcript(session, emit)
+        _persist_session_state(session, emit)
         _finalize_turn(session, logs, emit)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -318,12 +447,24 @@ def _session_from_payload(registry: _SessionRegistry, payload: dict) -> WebAgent
     session_id = str((payload or {}).get("session_id") or "").strip()
     if len(session_id) > _MAX_SESSION_ID_CHARS:
         raise HTTPException(status_code=400, detail="session_id 过长")
-    session = registry.get(session_id) if session_id else registry.get("default")
+    project_id = str((payload or {}).get("project_id") or "").strip() or None
+    if project_id is not None and len(project_id) > 128:
+        raise HTTPException(status_code=400, detail="project_id 过长")
+    try:
+        session = registry.get(
+            session_id or "default", project_id=project_id
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return session
 
 
-def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> None:
-    registry = _SessionRegistry(store_factory, embedder_factory, llm_factory)
+def register_agent_api(
+    app, *, store_factory, embedder_factory, llm_factory, repository_factory=None
+) -> None:
+    registry = _SessionRegistry(
+        store_factory, embedder_factory, llm_factory, repository_factory
+    )
 
     @app.post("/api/agent/chat")
     async def api_agent_chat(payload: dict):
@@ -352,7 +493,7 @@ def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> 
     async def api_agent_confirm(payload: dict):
         confirm = bool((payload or {}).get("confirm", True))
         session_id = str((payload or {}).get("session_id") or "").strip()
-        session = registry.find(session_id)
+        session = registry.find_or_restore(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="会话不存在或已过期")
         pending = getattr(session.ctx, "pending_action", None)
@@ -368,7 +509,21 @@ def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> 
             def worker():
                 try:
                     if confirm:
+                        if not session.ctx.store.claim_pending_action(pending.action_id):
+                            emit(
+                                {
+                                    "type": "error",
+                                    "message": "待确认操作已被其他请求处理，请刷新会话状态。",
+                                    "code": "confirmation_already_claimed",
+                                }
+                            )
+                            emit(None)
+                            return
                         name, result = confirm_pending_action(session.ctx)
+                        if not session.ctx.store.resolve_pending_action(
+                            pending.action_id, "executed", result=result
+                        ):
+                            raise RuntimeError("待确认操作已被其他请求处理")
                         emit(
                             {
                                 "type": "tool",
@@ -402,20 +557,41 @@ def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> 
                             pending=pending,
                             reason="用户在 Web 界面取消了待确认操作",
                         )
+                        if not session.ctx.store.resolve_pending_action(
+                            pending.action_id, "rejected",
+                            error="用户在 Web 界面取消了待确认操作",
+                        ):
+                            raise RuntimeError("待确认操作已被其他请求处理")
                     session.messages = new_messages
                 except Exception as exc:
                     # 确认可能已经执行了有副作用的工具。若协议已经闭合，必须
                     # 保存 tool result，避免重启后把已执行动作伪装成从未发生。
-                    _persist_closed_transcript(session, emit)
+                    _persist_session_state(session, emit)
                     emit({"type": "error", "message": f"确认操作失败：{exc}"})
                     emit(None)
                     return
-                _persist_closed_transcript(session, emit)
+                _persist_session_state(session, emit)
                 _finalize_turn(session, logs, emit)
 
             threading.Thread(target=worker, daemon=True).start()
 
         return _sse_endpoint(session, aq, emit, start_worker=start_worker)
+
+    @app.get("/api/agent/sessions/{session_id}")
+    def api_agent_session(session_id: str):
+        normalized_id = str(session_id or "").strip()
+        if not normalized_id or len(normalized_id) > _MAX_SESSION_ID_CHARS:
+            raise HTTPException(status_code=400, detail="session_id 不合法")
+        session = registry.find_or_restore(normalized_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        return {
+            "session_id": session.id,
+            "project_id": session.ctx.project_id,
+            "history": _history_events(session.messages),
+            "pending": _pending_event(session),
+            "run_id": session.run_id,
+        }
 
     @app.delete("/api/agent/sessions/{session_id}")
     def api_agent_clear_session(session_id: str):
@@ -425,7 +601,7 @@ def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> 
         if len(normalized_id) > _MAX_SESSION_ID_CHARS:
             raise HTTPException(status_code=400, detail="session_id 过长")
 
-        session = registry.find(normalized_id)
+        session = registry.find_or_restore(normalized_id)
         if session is None:
             return {
                 "session_id": normalized_id,
@@ -448,8 +624,12 @@ def register_agent_api(app, *, store_factory, embedder_factory, llm_factory) -> 
     def api_agent_runs(
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ):
-        runs = registry.store.list_agent_runs(limit, offset)
+        runs = registry.store.list_agent_runs(
+            limit, offset, project_id=project_id, session_id=session_id
+        )
         return {"items": [_run_dict(run) for run in runs]}
 
     @app.get("/api/agent/runs/{run_id}/events")

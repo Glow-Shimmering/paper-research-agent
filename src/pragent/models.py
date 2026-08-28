@@ -77,6 +77,8 @@ class AgentRunRecord:
     plan: Any = None
     budget: Any = None
     error: Optional[str] = None
+    project_id: Optional[str] = None
+    session_id: Optional[str] = None
 
     @property
     def run_id(self) -> str:

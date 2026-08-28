@@ -58,7 +58,7 @@
 - Web API 目前只有 status/papers/search/ask/websearch/reindex 与 agent run；Web 页面只有检索、问答、Agent、论文库四个 tab，evidence/notes/deep-reading tools 没有产品化界面。
 - 已有 `search_within_paper/get_paper_outline/read_pages/read_chunk_context/pin_evidence/get_evidence/list_evidence`，因此单篇精读应编排和展示这些能力，而不是再造底层工具。
 - 已有 arXiv 搜索与安全 PDF 下载；`websearch.py` 和 `download.py` 都是 arXiv 专用。Semantic Scholar/Crossref/普通网页需要 provider adapter、统一 source identity、去重和可追溯快照。
-- Web Agent session 是进程内状态（最多 64 个），刷新或重启会丢消息；run/event 虽持久化，但不能恢复研究工作区。
+- Web Agent 热会话仍有 64 个上限，但 project、transcript 与冻结 pending action 已持久化；页面刷新和服务重启均从 SQLite 恢复。
 - 当前依赖没有 DOCX 生成或网页正文抽取库；Markdown/CSV/JSON 可用标准库，DOCX 和 HTML extraction 需要新增有界依赖。
 - 对 100–1000 篇个人库，SQLite WAL + 当前本地 embedding 路线可继续使用；本期不因规模引入向量数据库。
 - 为让网页正文进入同一检索/evidence 链路，新产品应把索引对象提升为通用 `Document`（PDF/Web snapshot），而不是另建一套孤立的 web search。新运行目录使用 `~/.pragent`；旧 `~/.pagent` 不原地迁移，只通过显式 `pra import-pagent` 复制导入。
@@ -326,9 +326,11 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
 
 ### Phase 7 — Agent、Web 正确性与产品收尾
 
-- [ ] Step 25：将 Agent session/transcript/pending confirmation 持久化并绑定 project；增加 project source/artifact/evidence read tools，写入和联网保持确认。
-  - 已完成：闭合 transcript 的 SQLite 保存、按 session 重启恢复、幂等清空，以及正常/确认/取消闭合回合持久化。
-  - 未完成：页面刷新后重绘历史卡片、session 绑定 project、pending confirmation 冻结参数跨重启恢复，以及 project-scoped read tools；因此 Step 25 仍保持未勾选。
+- [x] Step 25：将 Agent session/transcript/pending confirmation 持久化并绑定 project；增加 project source/artifact/evidence read tools，写入和联网保持确认。
+  - 持久边界：session 永久绑定 project，run 记录 project/session；完整 transcript 与冻结 pending 参数、参数摘要、action digest、tool call/run 在一个 SQLite 事务中保存，重启复核后可继续或取消。
+  - 并发与 UI：确认前以 CAS 原子认领票据，跨进程重复确认不会重复执行；`GET /api/agent/sessions/{id}` 支持刷新重绘历史/tool/pending 卡片，项目选择在首轮后锁定。
+  - 工具：新增 project-scoped source/artifact/current-evidence 只读工具；未绑定 project 时 fail closed，原有联网与写入工具仍完全由 ToolSpec effects 进入确认集合。
+  - 验证：新增重启 pending、project scope/切换拒绝、历史恢复和项目工具合同；Windows 完整回归 `385 passed, 1 skipped`，临时目录 88 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、无缓存 wheel build/check 全部通过。
 - [ ] Step 26：修复 SSE disconnect session race，接入 cancel event；实现 deadline-aware tool handlers，补齐 timeout/idempotency 合同。
 - [ ] Step 27：完成 Dashboard、Evidence & Notes、job center、空状态、错误提示、中文帮助和响应式样式；HTMX/JS 全部随 wheel 本地打包。
 - [ ] Step 28：增加 deterministic product scenarios、live DeepSeek/manual provider smoke、质量 rubric、隐私/安全审查和数据备份恢复演练。

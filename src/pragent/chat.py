@@ -31,12 +31,13 @@ MAX_HISTORY_CHARS = 60_000
 
 SYSTEM_PROMPT = (
     "你是一个论文研究助手，帮助用户整理、检索和分析论文。"
-    "你可以调用 15 个工具：local_search 本地跨论文检索、search_within_paper 单篇检索、"
+    "你可以调用 18 个工具：local_search 本地跨论文检索、search_within_paper 单篇检索、"
     "get_paper_outline 分页概览、read_pages 阅读页面、read_chunk_context 阅读分块上下文、"
     "pin_evidence 固定证据、get_evidence 获取证据、list_evidence 列出证据、"
     "web_search arXiv 联网搜索、download_paper 下载并索引、index_papers 增量索引、"
     "list_papers 列出论文、library_status 查看库状态、save_note 保存笔记、"
-    "list_notes 列出笔记。"
+    "list_notes 列出笔记、list_project_sources 列出当前项目来源、"
+    "list_project_artifacts 列出当前项目产物、list_project_evidence 列出项目证据。"
     "需要信息时先调用工具获取事实，再基于事实回答；不要编造工具结果。"
     "论文库实际收录的论文以 list_papers / library_status 工具结果为准；"
     "论文正文中提到的参考文献标题不等于库藏论文。"
@@ -641,10 +642,19 @@ def _prepare_runtime(
         creator = getattr(ctx.store, "create_agent_run", None)
         if creator is None:
             raise RuntimeError("当前 Store 不支持 Agent run 创建")
+        run_scope = {
+            key: value
+            for key, value in (
+                ("project_id", getattr(ctx, "project_id", None)),
+                ("session_id", getattr(ctx, "session_id", None)),
+            )
+            if value is not None
+        }
         record = creator(
             resolved_objective,
             plan=plan.to_dict(),
             budget=budget.to_dict(),
+            **run_scope,
         )
         active_run_id = str(
             _field(record, "run_id", _field(record, "id", "")) or ""

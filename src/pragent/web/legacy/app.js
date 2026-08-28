@@ -464,6 +464,9 @@ async function reindex() {
 $("#agent-btn").addEventListener("click", runAgent);
 $("#agent-q").addEventListener("keydown", function (e) { if (e.key === "Enter") runAgent(); });
 $("#agent-new").addEventListener("click", newAgentSession);
+$("#agent-project").addEventListener("change", function () {
+  localStorage.setItem("pra-agent-project", $("#agent-project").value || "");
+});
 
 function hide(el) { el.classList.add("hidden"); }
 function unhide(el) { el.classList.remove("hidden"); }
@@ -495,7 +498,67 @@ async function newAgentSession() {
   hide($("#agent-pending"));
   clear($("#agent-pending"));
   $("#agent-q").value = "";
+  $("#agent-project").disabled = false;
   agentStatus("已开始新会话");
+}
+
+async function loadAgentProjects() {
+  const select = $("#agent-project");
+  const preferred = localStorage.getItem("pra-agent-project") || "";
+  try {
+    const data = await api("/api/v1/projects?limit=200");
+    for (const project of data.items || []) {
+      const option = document.createElement("option");
+      option.value = project.id;
+      addText(option, project.title || project.id);
+      select.appendChild(option);
+    }
+    if ([...select.options].some(function (option) { return option.value === preferred; })) {
+      select.value = preferred;
+    }
+  } catch (err) {
+    agentStatus("项目列表加载失败：" + err.message, true);
+  }
+}
+
+function restoreAgentHistory(events) {
+  clear($("#agent-flow"));
+  for (const event of events || []) {
+    if (event.type === "message" && event.role === "user") {
+      agentAddUser(event.content || "");
+    } else if (event.type === "message" && event.role === "assistant") {
+      const block = agentStartAssistant();
+      block.raw = event.content || "";
+      agentRenderText(block);
+    } else if (event.type === "tool") {
+      agentAddTool(event.name, event.args, event.result, event.code);
+    }
+  }
+}
+
+async function restoreAgentSession() {
+  const sessionId = sessionStorage.getItem("pra-agent-session");
+  if (!sessionId) return;
+  try {
+    const state = await api("/api/agent/sessions/" + encodeURIComponent(sessionId));
+    restoreAgentHistory(state.history);
+    currentRunId = state.run_id || null;
+    if (state.project_id) {
+      $("#agent-project").value = state.project_id;
+      localStorage.setItem("pra-agent-project", state.project_id);
+    }
+    $("#agent-project").disabled = Boolean((state.history || []).length || state.pending);
+    if (state.pending) {
+      renderAgentPending(state.pending);
+      agentStatus("已恢复等待确认的操作");
+    } else if ((state.history || []).length) {
+      agentStatus("已恢复会话历史");
+    }
+  } catch (err) {
+    if (!String(err.message || "").includes("404")) {
+      agentStatus("会话恢复失败：" + err.message, true);
+    }
+  }
 }
 
 function agentScroll() {
@@ -668,6 +731,7 @@ async function runAgent() {
     return;
   }
   agentSetBusy(true);
+  $("#agent-project").disabled = true;
   $("#agent-q").value = "";
   hide($("#agent-pending"));
   clear($("#agent-pending"));
@@ -675,6 +739,7 @@ async function runAgent() {
   agentStatus("正在检索与思考…");
   const status = await consumeAgentStream("/api/agent/chat", {
     session_id: agentSessionId(),
+    project_id: $("#agent-project").value || null,
     question: q,
   });
   if (status === "awaiting_confirmation") {
@@ -709,7 +774,10 @@ async function agentConfirm(confirm) {
 // ---- Run 审计侧栏 ----
 async function refreshAgentRuns() {
   try {
-    const data = await api("/api/agent/runs?limit=50");
+    const params = new URLSearchParams({ limit: "50" });
+    const sessionId = sessionStorage.getItem("pra-agent-session");
+    if (sessionId) params.set("session_id", sessionId);
+    const data = await api("/api/agent/runs?" + params.toString());
     const box = $("#agent-runs");
     clear(box);
     if (!data.items.length) { addText(box, "暂无 Agent run。"); return; }
@@ -754,6 +822,12 @@ async function loadRunEvents(runId, rowEl) {
   }
 }
 
-refreshAgentRuns();
+async function initializeAgent() {
+  await loadAgentProjects();
+  await restoreAgentSession();
+  await refreshAgentRuns();
+}
+
+initializeAgent();
 
 loadLibrary();

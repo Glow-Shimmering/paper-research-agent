@@ -114,3 +114,9 @@ HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-en
 - 字段 regeneration/edit、revision history 与 field evidence 使用同一 `/api/v1/projects/.../deep-reads/...` scope。
 
 默认仅允许 loopback；远程模式继续要求 API key + TLS。所有 HTMX 写表单要求同源和 double-submit CSRF token，JSON 写请求受 API key/origin/body limit 中间件保护。
+
+## 9. Project-scoped Web Agent
+
+Agent 会话可在第一次提问时绑定一个研究项目，随后不能切换到其他 project；每个 run 同时带有 project/session scope。`list_project_sources`、`list_project_artifacts` 和 `list_project_evidence` 只读取该绑定项目，且不返回 snapshot path、抽取全文或服务器绝对路径。它们属于本地只读工具，不触发确认；`web_search`、下载、索引、固定证据和保存笔记等联网/写入工具继续按 effects 强制确认。
+
+浏览器用 `GET /api/agent/sessions/{session_id}` 恢复用户/assistant/tool 卡片、project、run 和待确认卡片。数据库在一个事务中保存完整 OpenAI-compatible transcript 与冻结票据；服务重启后会复核参数 SHA-256 和 action digest，再允许按原 `tool_call_id/run_id` 确认或取消。确认执行前先用 CAS 认领票据，因此并发服务不能重复执行同一写入；页面提交不同 project ID 会返回冲突。

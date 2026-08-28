@@ -704,6 +704,8 @@ class Store:
         *,
         status: str = "proposed",
         run_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> AgentRunRecord:
         """新建可恢复的 Agent 运行。"""
 
@@ -713,10 +715,24 @@ class Store:
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         created_at = now_iso()
         with self._lock, self._conn:
+            if session_id is not None:
+                session_id = self._validate_agent_session_id(session_id)
+                session = self._conn.execute(
+                    "SELECT project_id FROM agent_sessions WHERE id=?", (session_id,)
+                ).fetchone()
+                if session is None:
+                    raise KeyError(f"Agent session 不存在：{session_id}")
+                if session["project_id"] != project_id:
+                    raise ValueError("Agent run 的 project 与 session 不一致")
+            elif project_id is not None and self._conn.execute(
+                "SELECT 1 FROM research_projects WHERE id=?", (project_id,)
+            ).fetchone() is None:
+                raise KeyError(f"研究项目不存在：{project_id}")
             self._conn.execute(
                 """INSERT INTO agent_runs
-                       (id, objective, status, plan, budget, error, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
+                       (id, objective, status, plan, budget, error, created_at, updated_at,
+                        project_id, session_id)
+                   VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)""",
                 (
                     run_id,
                     objective,
@@ -725,6 +741,8 @@ class Store:
                     self._json_dump_optional(budget),
                     created_at,
                     created_at,
+                    project_id,
+                    session_id,
                 ),
             )
             row = self._conn.execute(
@@ -854,20 +872,99 @@ class Store:
         self,
         limit: int = 50,
         offset: int = 0,
+        *,
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> list[AgentRunRecord]:
         """按创建时间倒序浏览 Agent run（Web 审计侧栏）。"""
         if limit < 0 or offset < 0:
             raise ValueError("limit 和 offset 必须是非负整数")
+        where: list[str] = []
+        params: list[Any] = []
+        if project_id is not None:
+            where.append("project_id=?")
+            params.append(project_id)
+        if session_id is not None:
+            where.append("session_id=?")
+            params.append(self._validate_agent_session_id(session_id))
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
         with self._lock:
             rows = self._conn.execute(
-                """SELECT * FROM agent_runs
+                f"""SELECT * FROM agent_runs {clause}
                    ORDER BY created_at DESC, id DESC
                    LIMIT ? OFFSET ?""",
-                (limit, offset),
+                (*params, limit, offset),
             ).fetchall()
         return [self._agent_run_from_row(row) for row in rows]
 
     # ---------- agent sessions / transcript ----------
+
+    def ensure_agent_session(
+        self,
+        session_id: str,
+        *,
+        project_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """创建会话壳或验证既有 project 绑定；绑定一旦产生便不可改写。"""
+
+        normalized_id = self._validate_agent_session_id(session_id)
+        timestamp = now_iso()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if project_id is not None and self._conn.execute(
+                    "SELECT 1 FROM research_projects WHERE id=?", (project_id,)
+                ).fetchone() is None:
+                    raise KeyError(f"研究项目不存在：{project_id}")
+                row = self._conn.execute(
+                    "SELECT * FROM agent_sessions WHERE id=?", (normalized_id,)
+                ).fetchone()
+                if row is None:
+                    self._conn.execute(
+                        """INSERT INTO agent_sessions
+                               (id, project_id, title, status, version, created_at, updated_at)
+                           VALUES (?, ?, '', 'active', 1, ?, ?)""",
+                        (normalized_id, project_id, timestamp, timestamp),
+                    )
+                elif project_id is not None and row["project_id"] != project_id:
+                    if row["project_id"] is not None or self._session_has_history_locked(
+                        normalized_id
+                    ):
+                        raise ValueError("Agent session 已绑定其他 project，不能改写")
+                    self._conn.execute(
+                        """UPDATE agent_sessions
+                           SET project_id=?, version=version+1, updated_at=? WHERE id=?""",
+                        (project_id, timestamp, normalized_id),
+                    )
+                row = self._conn.execute(
+                    "SELECT * FROM agent_sessions WHERE id=?", (normalized_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return dict(row)
+
+    def load_agent_session_state(self, session_id: str) -> Optional[dict[str, Any]]:
+        """读取 project 绑定、完整 transcript 与唯一未决确认票据。"""
+
+        normalized_id = self._validate_agent_session_id(session_id)
+        with self._lock:
+            session = self._conn.execute(
+                "SELECT * FROM agent_sessions WHERE id=?", (normalized_id,)
+            ).fetchone()
+            if session is None:
+                return None
+            pending = self._conn.execute(
+                """SELECT * FROM pending_actions
+                   WHERE session_id=? AND status='pending'
+                   ORDER BY created_at DESC, id DESC LIMIT 1""",
+                (normalized_id,),
+            ).fetchone()
+        result = dict(session)
+        result["messages"] = self.load_agent_messages(normalized_id)
+        result["pending_action"] = self._pending_action_from_row(pending) if pending else None
+        return result
 
     def load_agent_messages(self, session_id: str) -> list[dict[str, Any]]:
         """读取一个已完成 Web 会话的完整模型消息。
@@ -901,11 +998,19 @@ class Store:
         session_id: str,
         messages: list[dict[str, Any]],
     ) -> None:
-        """原子替换一个已完成会话的 transcript。
+        """兼容入口：原子替换 transcript，保留既有 project 绑定。"""
 
-        Web 层只在没有待确认动作时调用本方法，避免把未闭合的
-        assistant/tool 协议对作为可恢复上下文。
-        """
+        self.save_agent_session_state(session_id, messages)
+
+    def save_agent_session_state(
+        self,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        project_id: Optional[str] = None,
+        pending_action: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """原子保存 transcript，并可同时冻结一张待确认工具票据。"""
 
         normalized_id = self._validate_agent_session_id(session_id)
         serialized: list[tuple[str, str]] = []
@@ -925,19 +1030,34 @@ class Store:
                 raise ValueError("Agent message 必须可 JSON 序列化") from exc
             serialized.append((role, content))
 
+        pending_values: Optional[dict[str, Any]] = None
+        if pending_action is not None:
+            pending_values = self._validate_pending_action(pending_action)
         timestamp = now_iso()
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                if project_id is not None and self._conn.execute(
+                    "SELECT 1 FROM research_projects WHERE id=?", (project_id,)
+                ).fetchone() is None:
+                    raise KeyError(f"研究项目不存在：{project_id}")
+                existing = self._conn.execute(
+                    "SELECT project_id FROM agent_sessions WHERE id=?", (normalized_id,)
+                ).fetchone()
+                if existing is not None and project_id is not None and existing["project_id"] != project_id:
+                    if existing["project_id"] is not None or self._session_has_history_locked(
+                        normalized_id
+                    ):
+                        raise ValueError("Agent session 已绑定其他 project，不能改写")
                 self._conn.execute(
                     """INSERT INTO agent_sessions
                            (id, project_id, title, status, version, created_at, updated_at)
-                       VALUES (?, NULL, '', 'active', 1, ?, ?)
+                       VALUES (?, ?, '', 'active', 1, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET
-                           status='active',
-                           version=agent_sessions.version + 1,
+                           project_id=COALESCE(agent_sessions.project_id, excluded.project_id),
+                           status='active', version=agent_sessions.version + 1,
                            updated_at=excluded.updated_at""",
-                    (normalized_id, timestamp, timestamp),
+                    (normalized_id, project_id, timestamp, timestamp),
                 )
                 self._conn.execute(
                     "DELETE FROM agent_messages WHERE session_id=?",
@@ -959,10 +1079,141 @@ class Store:
                         for seq, (role, content) in enumerate(serialized, start=1)
                     ],
                 )
+                if pending_values is not None:
+                    run = self._conn.execute(
+                        "SELECT project_id, session_id FROM agent_runs WHERE id=?",
+                        (pending_values["run_id"],),
+                    ).fetchone()
+                    if run is None or run["session_id"] != normalized_id:
+                        raise ValueError("待确认动作必须绑定当前 session 的 Agent run")
+                    bound_project = self._conn.execute(
+                        "SELECT project_id FROM agent_sessions WHERE id=?", (normalized_id,)
+                    ).fetchone()["project_id"]
+                    if run["project_id"] != bound_project:
+                        raise ValueError("待确认动作的 project 与 session 不一致")
+                    self._conn.execute(
+                        """INSERT INTO pending_actions(
+                               id, session_id, run_id, tool_call_id, tool_name, tool_version,
+                               arguments, arguments_sha256, confirmation, result, error,
+                               status, version, created_at, updated_at, expires_at, resolved_at
+                           ) VALUES (?, ?, ?, ?, ?, '1', ?, ?, ?, NULL, NULL,
+                                     'pending', 1, ?, ?, NULL, NULL)
+                           ON CONFLICT(id) DO UPDATE SET
+                               arguments=excluded.arguments,
+                               arguments_sha256=excluded.arguments_sha256,
+                               confirmation=excluded.confirmation,
+                               version=pending_actions.version+1,
+                               updated_at=excluded.updated_at
+                           WHERE pending_actions.status='pending'""",
+                        (
+                            pending_values["action_id"], normalized_id,
+                            pending_values["run_id"], pending_values["tool_call_id"],
+                            pending_values["name"], pending_values["arguments"],
+                            pending_values["arguments_sha256"], pending_values["confirmation"],
+                            timestamp, timestamp,
+                        ),
+                    )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def resolve_pending_action(
+        self,
+        action_id: str,
+        status: str,
+        *,
+        result: Any = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """以 pending 状态为 CAS 前提关闭票据，避免重复执行。"""
+
+        if status not in {"approved", "rejected", "executed", "cancelled", "expired"}:
+            raise ValueError("pending action 终态不合法")
+        timestamp = now_iso()
+        expected_status = "approved" if status == "executed" else "pending"
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """UPDATE pending_actions
+                   SET status=?, result=?, error=?, version=version+1,
+                       updated_at=?, resolved_at=?
+                   WHERE id=? AND status=?""",
+                (
+                    status,
+                    self._json_dump_optional(result),
+                    error,
+                    timestamp,
+                    timestamp,
+                    str(action_id),
+                    expected_status,
+                ),
+            )
+        return bool(cursor.rowcount)
+
+    def claim_pending_action(self, action_id: str) -> bool:
+        """在执行有副作用的工具前，把票据从 pending 原子认领为 approved。"""
+
+        timestamp = now_iso()
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """UPDATE pending_actions
+                   SET status='approved', version=version+1, updated_at=?
+                   WHERE id=? AND status='pending'""",
+                (timestamp, str(action_id)),
+            )
+        return bool(cursor.rowcount)
+
+    def _session_has_history_locked(self, session_id: str) -> bool:
+        return self._conn.execute(
+            """SELECT EXISTS(
+                   SELECT 1 FROM agent_messages WHERE session_id=?
+                   UNION ALL
+                   SELECT 1 FROM pending_actions WHERE session_id=?
+               )""",
+            (session_id, session_id),
+        ).fetchone()[0] == 1
+
+    @staticmethod
+    def _validate_pending_action(value: dict[str, Any]) -> dict[str, Any]:
+        required = ("action_id", "name", "args", "digest", "tool_call_id", "run_id")
+        if not isinstance(value, dict) or any(value.get(key) in (None, "") for key in required):
+            raise ValueError("待确认动作缺少持久化绑定字段")
+        args = value["args"]
+        if not isinstance(args, dict):
+            raise ValueError("待确认动作 args 必须是字典")
+        arguments = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        confirmation = json.dumps(
+            {"action_id": str(value["action_id"]), "digest": str(value["digest"])},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return {
+            "action_id": str(value["action_id"]),
+            "name": str(value["name"]),
+            "run_id": str(value["run_id"]),
+            "tool_call_id": str(value["tool_call_id"]),
+            "arguments": arguments,
+            "arguments_sha256": hashlib.sha256(arguments.encode("utf-8")).hexdigest(),
+            "confirmation": confirmation,
+        }
+
+    @staticmethod
+    def _pending_action_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        confirmation = json.loads(row["confirmation"])
+        arguments = json.loads(row["arguments"])
+        encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != row["arguments_sha256"]:
+            raise ValueError("待确认动作参数摘要校验失败")
+        return {
+            "action_id": row["id"],
+            "name": row["tool_name"],
+            "args": arguments,
+            "digest": confirmation.get("digest"),
+            "tool_call_id": row["tool_call_id"],
+            "run_id": row["run_id"],
+            "status": row["status"],
+        }
 
     def delete_agent_session(self, session_id: str) -> bool:
         """删除会话及其级联 transcript；不存在时幂等返回 ``False``。"""
@@ -1198,6 +1449,8 @@ class Store:
             plan=cls._json_load_optional(row["plan"]),
             budget=cls._json_load_optional(row["budget"]),
             error=row["error"],
+            project_id=row["project_id"],
+            session_id=row["session_id"],
         )
 
     @classmethod

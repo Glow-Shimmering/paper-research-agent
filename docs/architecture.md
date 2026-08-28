@@ -103,6 +103,8 @@ SQLite schema v6 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 
 每个 migration 都有名称、版本和 SHA-256 checksum 记录。磁盘数据库只在声明版本和已有表结构通过检查后迁移；升级前使用 SQLite backup API 生成一致备份，所有待执行步骤位于同一个 `BEGIN IMMEDIATE` 事务中。任一步、外键检查或历史校验失败都会回滚，未来版本数据库则不做修改并拒绝打开。研究对象与 job 使用独立行 `version` 做 compare-and-swap，不复用只服务于搜索缓存失效的 `index_revision`。完整关系与 freshness 规则见 [数据模型](data-model.md)。
 
+Web Agent 首次请求即创建并永久绑定 session 的 `project_id`；run 同时记录 project/session 外键。每个回合把完整消息和可选 `pending_actions` 票据放在同一事务中保存，票据包含冻结参数、参数 SHA-256、action digest、原始 tool call 与 run。重启恢复时同时复核参数哈希和 action digest；确认前再用 SQLite CAS 将票据从 `pending` 原子认领为 `approved`，避免两个服务实例重复执行。project 来源、artifact 与 evidence 只读工具不需要确认，但没有 project 上下文时 fail closed；所有网络或本地写入工具仍由 `ToolEffect` 自动进入确认集合。
+
 事件默认保存必要元数据、哈希和结果摘要，避免把完整论文正文作为 trace 复制。LLM 响应同时保留 usage、finish reason 和 response ID，供后续成本与延迟评测使用。
 
 ### Web 项目工作区边界

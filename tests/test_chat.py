@@ -111,7 +111,7 @@ def tool_call(cid, name, args):
 def test_system_prompt_mentions_every_registered_tool():
     from pragent.tools import SCHEMA_NAMES
 
-    assert len(SCHEMA_NAMES) == 15
+    assert len(SCHEMA_NAMES) == 18
     assert all(name in SYSTEM_PROMPT for name in SCHEMA_NAMES)
 
 

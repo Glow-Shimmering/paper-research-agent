@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
 from pragent.store import Store
+from pragent.storage.research_repository import ResearchRepository
 from pragent.tool_protocol import ToolEffect, ToolResult, ToolSpec
 from pragent.tools import register_tool, unregister_tool
 from pragent.webapp import create_app
@@ -116,7 +117,9 @@ def test_agent_confirmation_and_resume(tmp_path, fake_write):
     assert "fake_write" in r1.text
     assert '"status": "awaiting_confirmation"' in r1.text
     assert _EXECUTED == []  # 未确认前不执行
-    assert store.load_agent_messages("s2") == []
+    pending_state = store.load_agent_session_state("s2")
+    assert [message["role"] for message in pending_state["messages"]] == ["user", "assistant"]
+    assert pending_state["pending_action"]["tool_call_id"] == "c2"
 
     r2 = client.post("/api/agent/confirm", json={"session_id": "s2", "confirm": True})
     assert r2.status_code == 200
@@ -133,6 +136,79 @@ def test_agent_confirmation_and_resume(tmp_path, fake_write):
         "assistant",
     ]
     assert restored[2]["tool_call_id"] == "c2"
+
+
+def test_pending_confirmation_survives_restart_and_history_is_redrawn(tmp_path, fake_write):
+    db_path = tmp_path / "restart-pending.db"
+    first_store = Store(db_path)
+    first_llm = StreamingScriptLLM(
+        [{
+            "content": "需要确认。",
+            "tool_calls": [{"id": "restart-call", "name": "fake_write", "arguments": {"text": "once"}}],
+        }]
+    )
+    first_client = TestClient(
+        create_app(store=first_store, embedder=FakeEmbedder(), llm=first_llm)
+    )
+    response = first_client.post(
+        "/api/agent/chat", json={"session_id": "restart-session", "question": "执行写入"}
+    )
+    assert response.status_code == 200
+    state = first_client.get("/api/agent/sessions/restart-session").json()
+    assert [item["role"] for item in state["history"] if item["type"] == "message"] == [
+        "user", "assistant"
+    ]
+    assert state["pending"]["name"] == "fake_write"
+
+    restarted_store = Store(db_path)
+    restarted_llm = StreamingScriptLLM(
+        [{"content": "重启后完成。", "tool_calls": [], "deltas": ["重启后完成。"]}]
+    )
+    restarted_client = TestClient(
+        create_app(store=restarted_store, embedder=FakeEmbedder(), llm=restarted_llm)
+    )
+    confirmed = restarted_client.post(
+        "/api/agent/confirm", json={"session_id": "restart-session", "confirm": True}
+    )
+    assert confirmed.status_code == 200
+    assert "重启后完成" in confirmed.text
+    assert _EXECUTED == ["once"]
+    assert restarted_store.load_agent_session_state("restart-session")["pending_action"] is None
+
+
+def test_agent_session_binds_project_and_rejects_scope_switch(tmp_path):
+    db_path = tmp_path / "project-session.db"
+    store = Store(db_path)
+    repository = ResearchRepository(db_path)
+    first_project = repository.create_project("项目一")
+    second_project = repository.create_project("项目二")
+    llm = StreamingScriptLLM([{"content": "已绑定。", "tool_calls": []}])
+    client = TestClient(create_app(store=store, embedder=FakeEmbedder(), llm=llm))
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "session_id": "scoped",
+            "project_id": first_project.id,
+            "question": "读取当前项目",
+        },
+    )
+    assert response.status_code == 200
+    state = client.get("/api/agent/sessions/scoped").json()
+    assert state["project_id"] == first_project.id
+    run = store.list_agent_runs(session_id="scoped")[0]
+    assert run.project_id == first_project.id
+    assert run.session_id == "scoped"
+
+    mismatch = client.post(
+        "/api/agent/chat",
+        json={
+            "session_id": "scoped",
+            "project_id": second_project.id,
+            "question": "切换项目",
+        },
+    )
+    assert mismatch.status_code == 409
 
 
 def test_agent_cancel_flow(tmp_path, fake_write):

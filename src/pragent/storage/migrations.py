@@ -736,9 +736,12 @@ def _validate_declared_schema(connection: sqlite3.Connection, version: int) -> N
         if schema_version > min(version, LATEST_SCHEMA_VERSION):
             continue
         for table, required_columns in table_columns.items():
+            # pragma_table_info 是表值函数，允许绑定参数，避免拼接 SQL。
             actual_columns = {
-                str(row[1])
-                for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM pragma_table_info(?)", (table,)
+                ).fetchall()
             }
             missing_columns = sorted(required_columns - actual_columns)
             if missing_columns:

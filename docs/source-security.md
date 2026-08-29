@@ -1,6 +1,6 @@
 # PRAgent 来源抓取安全边界
 
-PRAgent 只在用户显式提交 URL 时抓取普通网页。Provider 搜索与网页 snapshot 是两条不同边界：Semantic Scholar/Crossref/arXiv adapter 只访问固定官方 API host；任意 URL 导入必须经过 `ingestion/safe_fetch.py`。
+PRAgent 只在用户显式提交 URL 时抓取普通网页。Semantic Scholar/Crossref/arXiv adapter 与 arXiv PDF 下载只访问主机白名单内的固定官方 host，并复用 `ingestion/safe_fetch.py` 的 `pinned_get` 单跳 SSRF 防护（协议/凭据/私网地址校验 + DNS pinning），重定向仅允许在白名单主机之间逐跳重新校验；任意 URL 导入必须经过完整 `SafeFetcher` 流程（MIME/2xx/redirect 决策）。
 
 ## SSRF 防护
 

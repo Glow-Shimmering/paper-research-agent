@@ -305,6 +305,45 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
+def pinned_get(
+    url: str,
+    *,
+    headers: Mapping[str, str],
+    timeout: float,
+    max_bytes: int,
+    allowed_hosts: Optional[frozenset[str]] = None,
+) -> TransportResponse:
+    """单跳 GET：复用 SSRF 防护并返回任意状态码（含非 2xx）。
+
+    与 :class:`SafeFetcher` 不同，本函数不做 MIME/2xx/重定向决策，供
+    provider 客户端在自行处理状态码与重定向时复用协议/凭据/私网地址
+    校验与 DNS pinning。每跳只连接到已验证的公网 IP。
+    """
+    if allowed_hosts is not None:
+        # 先做轻量主机预检：非白名单主机不做 DNS 解析直接拒绝。
+        raw_host = (urlsplit(url).hostname or "").rstrip(".").lower()
+        if raw_host not in allowed_hosts:
+            raise SafeFetchError(
+                f"目标主机不在允许列表：{raw_host}",
+                code="host_not_allowed",
+            )
+    target, _ = _resolve_target(url, _resolve_addresses)
+    if allowed_hosts is not None and target.hostname not in allowed_hosts:
+        raise SafeFetchError(
+            f"目标主机不在允许列表：{target.hostname}",
+            code="host_not_allowed",
+        )
+    merged = dict(headers)
+    if not any(str(key).lower() == "host" for key in merged):
+        merged["Host"] = target.host_header
+    return PinnedHTTPTransport().request(
+        target,
+        headers=merged,
+        timeout=timeout,
+        max_bytes=max_bytes,
+    )
+
+
 def _resolve_target(
     url: str,
     resolver: Callable[[str, int], Iterable[str]],

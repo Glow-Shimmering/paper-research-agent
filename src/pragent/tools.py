@@ -7,6 +7,7 @@ import copy
 import json
 import hashlib
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -16,6 +17,7 @@ from .tool_protocol import (
     ConfirmedAction,
     PendingAction,
     ToolEffect,
+    ToolInterrupted,
     ToolResult,
     ToolSpec,
     ToolValidationError,
@@ -32,7 +34,14 @@ _MAX_EVIDENCE_IDS_PER_PAGE = 50
 
 @dataclass
 class ToolContext:
-    """工具执行上下文：对话进程内共享的真实依赖。"""
+    """工具执行上下文：对话进程内共享的真实依赖。
+
+    ``deadline``/``cancel_event`` 构成真实的工具执行预算：deadline 由执行器
+    按 ``ToolSpec.timeout_seconds`` 在每次调用前安装（单调时钟），cancel_event
+    由会话层在客户端断开时置位。I/O handler 必须把剩余预算传给网络调用，
+    长循环必须调用 ``ensure_runnable``/``is_runnable`` 检查；执行器不做
+    "future 超时但副作用线程继续跑"的伪超时。
+    """
 
     store: Any
     embedder: Any
@@ -43,6 +52,8 @@ class ToolContext:
     require_confirmation: bool = True
     pending_action: Optional[PendingAction | tuple[str, dict]] = None
     last_confirmed_action: Optional[ConfirmedAction] = None
+    cancel_event: Optional[Any] = None
+    deadline: Optional[float] = None
 
     def library_dir(self) -> Optional[Path]:
         raw = self.store.meta_get("library_dir")
@@ -50,6 +61,41 @@ class ToolContext:
             return None
         path = Path(raw)
         return path if path.is_dir() else None
+
+    def cancel_requested(self) -> bool:
+        return self.cancel_event is not None and self.cancel_event.is_set()
+
+    def remaining_seconds(self, default: Optional[float] = None) -> Optional[float]:
+        """剩余执行预算；未安装 deadline 时返回 ``default``。"""
+        if self.deadline is None:
+            return default
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            return 0.0
+        if default is not None:
+            return min(remaining, float(default))
+        return remaining
+
+    def check_deadline(self) -> None:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise ToolInterrupted(
+                "tool_deadline_exceeded", "工具执行超出截止时间预算，操作已停止"
+            )
+
+    def check_cancelled(self) -> None:
+        if self.cancel_requested():
+            raise ToolInterrupted("tool_cancelled", "工具收到取消信号，操作已停止")
+
+    def ensure_runnable(self) -> None:
+        """I/O handler 在发起昂贵调用前检查取消与截止时间。"""
+        self.check_cancelled()
+        self.check_deadline()
+
+    def is_runnable(self) -> bool:
+        """供长循环逐项检查的布尔版本；不抛异常。"""
+        if self.cancel_requested():
+            return False
+        return self.deadline is None or time.monotonic() < self.deadline
 
 
 def _value(obj: Any, *names: str, default: Any = None) -> Any:
@@ -199,8 +245,12 @@ def _local_search(ctx: ToolContext, query: str, top: int = 5) -> ToolResult | st
 def _web_search(ctx: ToolContext, query: str, top: int = 5) -> ToolResult:
     from .websearch import search_papers
 
+    # 网络调用使用当前工具执行预算的剩余时间，而不是固定超时。
+    ctx.ensure_runnable()
     try:
-        papers = search_papers(query, limit=max(1, min(top, 10)))
+        papers = search_papers(
+            query, limit=max(1, min(top, 10)), timeout=ctx.remaining_seconds()
+        )
     except Exception as exc:
         return ToolResult.error(
             "web_search_failed",
@@ -249,9 +299,13 @@ def _download_paper(
                 "或先运行 pra index <论文目录> 建立论文库。"
             ),
         )
+    ctx.ensure_runnable()
     target_dir.mkdir(parents=True, exist_ok=True)
+    remaining = ctx.remaining_seconds(default=60)
+    timeout = 60 if remaining is None else max(remaining, 0.001)
     try:
-        path = download_pdf(url, target_dir)
+        # 下载 I/O 使用剩余执行预算；超时由 socket 层真实中断，而非事后假装。
+        path = download_pdf(url, target_dir, timeout=timeout)
     except DownloadError:
         return ToolResult.error(
             "download_failed",
@@ -310,7 +364,14 @@ def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> ToolResult:
             ),
         )
     try:
-        result = index_library(ctx.store, target, ctx.embedder, progress=lambda msg: None)
+        # 长循环逐篇检查取消/预算；已处理部分以一致的增量提交保留。
+        result = index_library(
+            ctx.store,
+            target,
+            ctx.embedder,
+            progress=lambda msg: None,
+            should_continue=ctx.is_runnable,
+        )
     except Exception:
         return ToolResult.error("index_failed", "索引失败，请在终端检查本地文件与日志")
     message = (
@@ -318,6 +379,13 @@ def _index_papers(ctx: ToolContext, dir: Optional[str] = None) -> ToolResult:
         f"未变化 {result['unchanged']}，失败 {result['failed']}，"
         f"无文本 {result['skipped_no_text']}"
     )
+    if result.get("cancelled"):
+        return ToolResult.error(
+            "tool_cancelled",
+            f"索引在取消信号/预算耗尽后提前结束；已处理部分保持一致。{message}",
+            data=result,
+            retryable=True,
+        )
     if result["failed"]:
         return ToolResult.error("index_partial_failure", message, data=result)
     return ToolResult.success(message=message, data=result)
@@ -1235,8 +1303,33 @@ def _run_handler(
     *,
     run_id: Optional[str] = None,
 ) -> ToolResult:
+    """执行 handler 并安装真实执行预算。
+
+    deadline 按 ``spec.timeout_seconds`` 以单调时钟安装到 ctx；若外层已设
+    置更紧的 deadline（如任务级预算），取两者中更早者。handler 通过
+    ``ensure_runnable``/``is_runnable`` 与网络超时参数消费预算。没有线程池
+    future 包装：超时不是"放弃等待"，而是 handler 主动停止。
+    """
+    previous_deadline = ctx.deadline
+    spec_deadline = time.monotonic() + spec.timeout_seconds
+    if previous_deadline is not None:
+        ctx.deadline = min(spec_deadline, previous_deadline)
+    else:
+        ctx.deadline = spec_deadline
     try:
         return _handler_result(spec.handler(ctx, **dict(args)))
+    except ToolInterrupted as exc:
+        logger.warning(
+            "tool handler interrupted",
+            extra={
+                "session_id": ctx.session_id,
+                "run_id": run_id,
+                "tool_name": spec.name,
+                "code": exc.code,
+            },
+        )
+        # 幂等工具可安全重试；非幂等工具副作用未知，不允许自动重试。
+        return ToolResult.error(exc.code, str(exc), retryable=spec.idempotent)
     except Exception as exc:
         logger.exception(
             "tool handler failed",
@@ -1252,6 +1345,8 @@ def _run_handler(
             f"工具 {spec.name} 执行失败，请检查本地日志",
             retryable=spec.external,
         )
+    finally:
+        ctx.deadline = previous_deadline
 
 
 def _confirmation_result(pending: PendingAction, ctx: ToolContext) -> ToolResult:

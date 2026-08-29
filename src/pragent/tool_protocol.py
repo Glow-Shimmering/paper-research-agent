@@ -23,6 +23,19 @@ class ToolValidationError(ValueError):
     """工具定义或调用参数不满足协议。"""
 
 
+class ToolInterrupted(RuntimeError):
+    """工具因取消信号或截止时间主动停止。
+
+    ``code`` 为 ``tool_cancelled``（外部取消事件）或
+    ``tool_deadline_exceeded``（执行预算耗尽）。副作用是否可能已经发生由
+    ``ToolSpec.idempotent`` 描述：非幂等工具超时后不得自动重试。
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str

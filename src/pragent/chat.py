@@ -66,6 +66,14 @@ class TurnLog:
     run_id: Optional[str] = None
 
 
+class TurnCancelled(RuntimeError):
+    """回合因取消信号在阶段边界终止（如 Web 客户端断开）。
+
+    抛出前 run 已转入 ``cancelled`` 终态并写入审计事件；调用方负责把
+    消息恢复到上一个已持久化边界并保存会话状态。
+    """
+
+
 @dataclass(frozen=True)
 class _NormalizedToolResult:
     ok: bool
@@ -186,6 +194,25 @@ def chat_turn(
         return messages, logs
 
     while True:
+        # 取消信号（如 Web 客户端断开）只在阶段边界生效：正在执行的
+        # LLM 请求/工具不抢占，但不会开始新的阶段。
+        if ctx.cancel_requested():
+            _append_event(
+                ctx,
+                active_run_id,
+                "turn_cancelled",
+                {"reason": "收到取消信号，回合在阶段边界终止"},
+            )
+            if runtime.status is RunStatus.RUNNING:
+                _transition_runtime(
+                    ctx,
+                    active_run_id,
+                    runtime,
+                    RunStatus.CANCELLED,
+                    error="回合在阶段边界被取消",
+                )
+            raise TurnCancelled("回合已按取消信号在阶段边界终止")
+
         try:
             round_number = executor.begin_round()
         except AgentBudgetExceeded as exc:

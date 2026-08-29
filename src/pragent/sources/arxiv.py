@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 import time
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -14,6 +13,9 @@ from .base import NormalizedSource, SourceProviderError
 from .identity import normalize_arxiv_id, normalize_doi
 
 ARXIV_API = "https://export.arxiv.org/api/query"
+_ARXIV_API_HOST = "export.arxiv.org"
+_MAX_FEED_BYTES = 10 * 1024 * 1024
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV = "{http://arxiv.org/schemas/atom}"
 _DEFAULT_TIMEOUT = 20.0
@@ -55,7 +57,9 @@ class ArxivAdapter:
         self._limiter = limiter or _GLOBAL_LIMITER
         self._requester = requester or _request_bytes
 
-    def search(self, query: str, *, limit: int = 10) -> list[NormalizedSource]:
+    def search(
+        self, query: str, *, limit: int = 10, timeout: Optional[float] = None
+    ) -> list[NormalizedSource]:
         query = str(query).strip()
         if not query:
             raise ValueError("query 不能为空")
@@ -71,7 +75,7 @@ class ArxivAdapter:
                 "sortOrder": "descending",
             }
         )
-        return self._fetch(f"{ARXIV_API}?{params}")
+        return self._fetch(f"{ARXIV_API}?{params}", timeout=timeout)
 
     def lookup(self, identifier: str) -> Optional[NormalizedSource]:
         if len(str(identifier)) > 500:
@@ -83,13 +87,13 @@ class ArxivAdapter:
         records = self._fetch(f"{ARXIV_API}?{params}")
         return records[0] if records else None
 
-    def _fetch(self, url: str) -> list[NormalizedSource]:
+    def _fetch(self, url: str, *, timeout: Optional[float] = None) -> list[NormalizedSource]:
         self._limiter.wait()
         try:
             body = self._requester(
                 url,
                 {"User-Agent": _USER_AGENT, "Accept": "application/atom+xml"},
-                self.timeout,
+                self.timeout if timeout is None else timeout,
             )
         except SourceProviderError:
             raise
@@ -111,6 +115,14 @@ class ArxivAdapter:
 
 
 def parse_arxiv_feed(body: bytes | str) -> list[NormalizedSource]:
+    # Atom feed 不应包含 DTD；显式拒绝以阻断 XML 实体扩展类解析攻击。
+    probe = body[:1024].lower() if isinstance(body, bytes) else body[:1024].lower().encode("utf-8")
+    if b"<!doctype" in probe or b"<!entity" in probe:
+        raise SourceProviderError(
+            "arXiv 响应包含非法 DTD/实体声明，已拒绝解析",
+            provider="arxiv",
+            code="invalid_response",
+        )
     root = ET.fromstring(body)
     retrieved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     records: list[NormalizedSource] = []
@@ -182,9 +194,26 @@ def parse_arxiv_feed(body: bytes | str) -> list[NormalizedSource]:
 
 
 def _request_bytes(url: str, headers: dict[str, str], timeout: float) -> bytes:
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    # SSRF-safe 单跳请求：只允许 arXiv 官方主机，解析并固定公网 IP；
+    # 非 2xx 显式失败（不静默跟随重定向）。
+    from ..ingestion.safe_fetch import pinned_get
+
+    response = pinned_get(
+        url,
+        headers=headers,
+        timeout=timeout,
+        max_bytes=_MAX_FEED_BYTES,
+        allowed_hosts=frozenset({_ARXIV_API_HOST}),
+    )
+    if response.status != 200:
+        raise SourceProviderError(
+            f"arXiv HTTP {response.status}",
+            provider="arxiv",
+            code=f"http_{response.status}",
+            retryable=response.status in _RETRYABLE_STATUSES,
+            status_code=response.status,
+        )
+    return response.body
 
 
 def _validate_limit(limit: int) -> None:

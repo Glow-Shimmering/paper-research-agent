@@ -336,9 +336,12 @@ def _validate_columns(
     required: dict[str, set[str]],
 ) -> None:
     for table, required_columns in required.items():
+        # pragma_table_info 是表值函数，允许绑定参数，避免拼接 SQL。
         columns = {
-            str(row[1])
-            for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM pragma_table_info(?)", (table,)
+            ).fetchall()
         }
         if not columns:
             raise ImportPagentError(f"旧数据库缺少表：{table}")
@@ -447,11 +450,26 @@ def _migrate_and_validate_staging(db_path: Path, plan: ImportPlan) -> None:
         connection.close()
 
 
-def _database_logical_fingerprint(connection: sqlite3.Connection) -> str:
-    """对全部旧应用表内容做确定性摘要，用于发现 plan/backup 间变化。"""
+def _digest_row(digest: "hashlib._Hash", row: tuple) -> None:
+    for value in row:
+        if value is None:
+            payload = b"n"
+        elif isinstance(value, bytes):
+            payload = b"b" + value
+        else:
+            payload = b"t" + str(value).encode("utf-8")
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
 
-    digest = hashlib.sha256()
-    tables = [
+
+def _database_logical_fingerprint(connection: sqlite3.Connection) -> str:
+    """对全部旧应用表内容做确定性摘要，用于发现 plan/backup 间变化。
+
+    只指纹 v1/v2 的六个应用表，且 SQL 全部为字面量；出现未知表直接
+    fail closed（导入只接受已验证的 Pagent schema）。
+    """
+
+    present = {
         str(row[0])
         for row in connection.execute(
             """
@@ -460,21 +478,37 @@ def _database_logical_fingerprint(connection: sqlite3.Connection) -> str:
             ORDER BY name
             """
         ).fetchall()
-    ]
-    for table in tables:
-        digest.update(table.encode("utf-8"))
-        digest.update(b"\0")
-        rows = connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
-        for row in rows:
-            for value in row:
-                if value is None:
-                    payload = b"n"
-                elif isinstance(value, bytes):
-                    payload = b"b" + value
-                else:
-                    payload = b"t" + str(value).encode("utf-8")
-                digest.update(len(payload).to_bytes(8, "big"))
-                digest.update(payload)
+    }
+    known = {"papers", "chunks", "meta", "evidence", "agent_runs", "agent_events"}
+    unexpected = sorted(present - known)
+    if unexpected:
+        raise ImportPagentError(f"旧数据库包含未知表：{', '.join(unexpected)}")
+
+    digest = hashlib.sha256()
+    if "papers" in present:
+        digest.update(b"papers\0")
+        for row in connection.execute("SELECT * FROM papers ORDER BY rowid"):
+            _digest_row(digest, row)
+    if "chunks" in present:
+        digest.update(b"chunks\0")
+        for row in connection.execute("SELECT * FROM chunks ORDER BY rowid"):
+            _digest_row(digest, row)
+    if "meta" in present:
+        digest.update(b"meta\0")
+        for row in connection.execute("SELECT * FROM meta ORDER BY rowid"):
+            _digest_row(digest, row)
+    if "evidence" in present:
+        digest.update(b"evidence\0")
+        for row in connection.execute("SELECT * FROM evidence ORDER BY rowid"):
+            _digest_row(digest, row)
+    if "agent_runs" in present:
+        digest.update(b"agent_runs\0")
+        for row in connection.execute("SELECT * FROM agent_runs ORDER BY rowid"):
+            _digest_row(digest, row)
+    if "agent_events" in present:
+        digest.update(b"agent_events\0")
+        for row in connection.execute("SELECT * FROM agent_events ORDER BY rowid"):
+            _digest_row(digest, row)
     return digest.hexdigest()
 
 

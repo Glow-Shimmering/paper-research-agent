@@ -2,7 +2,13 @@
 
 from .html_extract import ExtractedWebDocument, HtmlExtractionError, extract_html
 from .indexing import IndexedSourceResult, index_pdf_source, index_web_source
-from .safe_fetch import FetchPolicy, SafeFetchError, SafeFetchResult, SafeFetcher
+from .safe_fetch import (
+    FetchPolicy,
+    SafeFetchError,
+    SafeFetchResult,
+    SafeFetcher,
+    pinned_get,
+)
 from .snapshots import SnapshotError, SnapshotRef, SnapshotStore
 from .web import WebIngestResult, WebIngestService
 
@@ -22,4 +28,5 @@ __all__ = [
     "extract_html",
     "index_pdf_source",
     "index_web_source",
+    "pinned_get",
 ]

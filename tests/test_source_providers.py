@@ -134,7 +134,9 @@ def test_semantic_scholar_fixture_optional_auth_and_normalization():
     client = JsonHttpClient(
         "semantic_scholar", requester=requester, limiter=RateLimiter(0)
     )
-    adapter = SemanticScholarAdapter(api_key="optional-secret", client=client)
+    # 测试假值：仅验证请求头透传，不是任何可用的凭据字面量。
+    fake_key = "test-header-passthrough-value-not-a-secret"
+    adapter = SemanticScholarAdapter(api_key=fake_key, client=client)
     item = adapter.search("agents", limit=3)[0]
 
     assert item.provider_record_id == "CorpusId:123"
@@ -142,8 +144,8 @@ def test_semantic_scholar_fixture_optional_auth_and_normalization():
     assert item.doi == "10.1000/agent"
     assert item.arxiv_id == "2501.00001"
     assert item.pdf_url == "https://arxiv.org/pdf/2501.00001"
-    assert calls[0][1]["x-api-key"] == "optional-secret"
-    assert "optional-secret" not in calls[0][0]
+    assert calls[0][1]["x-api-key"] == fake_key
+    assert fake_key not in calls[0][0]
 
 
 def test_crossref_fixture_polite_header_and_normalization():

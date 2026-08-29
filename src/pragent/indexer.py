@@ -179,8 +179,14 @@ def index_library(
     force: bool = False,
     prune: bool = True,
     progress: Callable[[str], None] = print,
+    should_continue: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    """增量索引。返回 {added, updated, unchanged, failed, removed, skipped_no_text}。"""
+    """增量索引。返回 {added, updated, unchanged, failed, removed, skipped_no_text}。
+
+    ``should_continue`` 为可选的逐篇继续检查（取消/预算）；返回 False 时
+    停止处理剩余文件并把 ``cancelled`` 置入结果。已处理部分仍以一致的
+    事务提交，重跑可安全续作。
+    """
     result = _new_result()
     pdf_dir = validate_pdf_directory(pdf_dir)
     state = store.index_state()
@@ -216,6 +222,9 @@ def index_library(
     if force:
         staged: list[tuple[Paper, list[Chunk], bool]] = []
         for i, path in enumerate(pdfs, 1):
+            if should_continue is not None and not should_continue():
+                # force 是全量替换：取消后中止，原索引完全不动。
+                raise RuntimeError("强制重建在取消信号后中止；原索引未修改。")
             seen.add(str(path))
             progress(f"[{i}/{len(pdfs)}] {path.name}")
             try:
@@ -289,6 +298,10 @@ def index_library(
 
     staged_updates: list[tuple[Paper, list[Chunk]]] = []
     for i, path in enumerate(pdfs, 1):
+        if should_continue is not None and not should_continue():
+            result["cancelled"] = True
+            progress("收到取消信号；停止处理剩余文件，已处理部分保持一致")
+            break
         normalized = str(path)
         seen.add(normalized)
         progress(f"[{i}/{len(pdfs)}] {path.name}")

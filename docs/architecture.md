@@ -74,7 +74,7 @@ stateDiagram-v2
 
 - JSON Schema 参数合同；
 - `READ_LOCAL`、`WRITE_LOCAL`、`NETWORK` 副作用；
-- 超时和幂等元数据；
+- 超时与幂等合同：执行器按 `timeout_seconds` 以单调时钟安装真实 deadline（与外层任务级预算取更紧者），网络 handler 把剩余预算作为 socket 超时传入，长循环逐项检查取消；deadline/取消中断映射为 `tool_deadline_exceeded`/`tool_cancelled` 结果，且仅幂等工具标记可重试，非幂等工具副作用未知不自动重试；
 - 结构化 `ToolResult`，包括错误码、重试属性和 evidence ID。
 
 写入或联网操作不会立即执行。运行时保存包含工具名、冻结参数、`tool_call_id` 和参数摘要的确认票据；用户批准后只允许执行该票据绑定的动作。取消会补齐原工具协议消息并把 run 转为 `cancelled`。状态 CAS 失败时不清理票据，允许安全重试。
@@ -104,6 +104,8 @@ SQLite schema v6 保留 v1/v2 的论文索引、证据与 Agent 审计表，并�
 每个 migration 都有名称、版本和 SHA-256 checksum 记录。磁盘数据库只在声明版本和已有表结构通过检查后迁移；升级前使用 SQLite backup API 生成一致备份，所有待执行步骤位于同一个 `BEGIN IMMEDIATE` 事务中。任一步、外键检查或历史校验失败都会回滚，未来版本数据库则不做修改并拒绝打开。研究对象与 job 使用独立行 `version` 做 compare-and-swap，不复用只服务于搜索缓存失效的 `index_revision`。完整关系与 freshness 规则见 [数据模型](data-model.md)。
 
 Web Agent 首次请求即创建并永久绑定 session 的 `project_id`；run 同时记录 project/session 外键。每个回合把完整消息和可选 `pending_actions` 票据放在同一事务中保存，票据包含冻结参数、参数 SHA-256、action digest、原始 tool call 与 run。重启恢复时同时复核参数哈希和 action digest；确认前再用 SQLite CAS 将票据从 `pending` 原子认领为 `approved`，避免两个服务实例重复执行。project 来源、artifact 与 evidence 只读工具不需要确认，但没有 project 上下文时 fail closed；所有网络或本地写入工具仍由 `ToolEffect` 自动进入确认集合。
+
+SSE 回合与排他锁绑定：每回合持有会话锁，SSE 流提前断开只置位本回合独立的取消事件——回合在阶段边界终止，普通回合的消息恢复到上一个持久化边界，run 转为 `cancelled`；确认续跑中断开时，已执行工具的协议闭合 transcript 保留不回滚。排他锁等 worker 线程真正结束后才释放，断开不会让并发回合同时修改同一 session；断开后的迟到 SSE 事件在 emit 入口丢弃，终态以 Store 中的 run/session 记录为准。
 
 事件默认保存必要元数据、哈希和结果摘要，避免把完整论文正文作为 trace 复制。LLM 响应同时保留 usage、finish reason 和 response ID，供后续成本与延迟评测使用。
 

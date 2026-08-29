@@ -26,11 +26,17 @@ class WebPaper:
 _ADAPTER = ArxivAdapter()
 
 
-def search_papers(query: str, limit: int = 5) -> list[WebPaper]:
-    """按相关性检索 arXiv；保留旧 ``WebPaper`` 返回合同。"""
+def search_papers(query: str, limit: int = 5, timeout: Optional[float] = None) -> list[WebPaper]:
+    """按相关性检索 arXiv；保留旧 ``WebPaper`` 返回合同。
+
+    ``timeout`` 为本次调用的网络预算（秒）；``None`` 时使用 adapter 默认值。
+    """
 
     try:
-        records = _ADAPTER.search(query, limit=limit)
+        if timeout is None:
+            records = _ADAPTER.search(query, limit=limit)
+        else:
+            records = _ADAPTER.search(query, limit=limit, timeout=timeout)
     except SourceProviderError as exc:
         raise WebSearchError(str(exc)) from exc
     return [

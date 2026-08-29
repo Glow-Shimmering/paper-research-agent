@@ -9,8 +9,6 @@ import os
 import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -260,37 +258,27 @@ def _request(
     timeout: float,
     max_response_bytes: int,
 ) -> HttpResponse:
-    request = urllib.request.Request(url, headers=dict(headers), method="GET")
+    # 复用 SSRF-safe 单跳请求：协议/凭据/私网地址校验并固定解析 IP；
+    # 非法目标、超限响应与网络故障显式失败，由 JsonHttpClient 统一重试。
+    from ..ingestion.safe_fetch import SafeFetchError, pinned_get
+
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)
-    except urllib.error.HTTPError as exc:
-        response = exc
-    with response:
-        response_headers = {str(key): str(value) for key, value in response.headers.items()}
-        raw_length = response.headers.get("Content-Length")
-        if raw_length:
-            try:
-                length = int(raw_length)
-            except ValueError as exc:
-                raise SourceProviderError(
-                    "provider Content-Length 无效",
-                    provider="http",
-                    code="invalid_content_length",
-                ) from exc
-            if length < 0 or length > max_response_bytes:
-                raise SourceProviderError(
-                    "provider 响应超过大小限制",
-                    provider="http",
-                    code="response_too_large",
-                )
-        body = response.read(max_response_bytes + 1)
-        if len(body) > max_response_bytes:
-            raise SourceProviderError(
-                "provider 响应超过大小限制",
-                provider="http",
-                code="response_too_large",
-            )
-        return HttpResponse(int(response.status), response_headers, body)
+        response = pinned_get(
+            url,
+            headers=dict(headers),
+            timeout=timeout,
+            max_bytes=max_response_bytes,
+        )
+    except SafeFetchError as exc:
+        raise SourceProviderError(
+            str(exc),
+            provider="http",
+            code=exc.code,
+            retryable=exc.retryable,
+            status_code=exc.status_code,
+        ) from exc
+    response_headers = {str(key): str(value) for key, value in response.headers.items()}
+    return HttpResponse(int(response.status), response_headers, response.body)
 
 
 def _retry_delay(value: Optional[str], *, default: float, now: float) -> float:

@@ -20,6 +20,7 @@ def TestClient(app, **kwargs):
 
 
 _EXECUTED: list[str] = []
+_TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled", "blocked"}
 
 
 @pytest.fixture
@@ -402,10 +403,14 @@ def test_agent_rejects_concurrent_turn_and_clear_for_same_session(tmp_path, monk
     started = threading.Event()
     release = threading.Event()
 
-    def blocking_run_turn(session, emit, *, objective=None):
+    def blocking_run_turn(session, emit, *, objective=None, scope=None):
         started.set()
         release.wait(timeout=5)
-        emit(None)
+        # worker 结束必须先于流终止哨兵（scope.worker_finished 内部发送）。
+        if scope is not None:
+            scope.worker_finished()
+        else:
+            emit(None)
 
     monkeypatch.setattr(agent_api, "_run_turn", blocking_run_turn)
     app = create_app(
@@ -431,3 +436,214 @@ def test_agent_rejects_concurrent_turn_and_clear_for_same_session(tmp_path, monk
 
     assert concurrent.status_code == 409
     assert clearing.status_code == 409
+
+
+# ---------- Step 26：SSE 断开竞态、cancel event 与迟到事件合同 ----------
+
+
+def test_turn_scope_releases_lock_only_after_worker_finishes():
+    """断开竞态合同：流退出不得释放未完成 worker 的排他锁。"""
+    import pragent.agent_api as agent_api
+
+    session = agent_api.WebAgentSession("scope-test", store=None, embedder=None, llm=None)
+    assert session.lock.acquire(blocking=False)
+    scope = agent_api._TurnScope(session)
+    scope.bind_emitter(lambda event: None)
+
+    # 客户端断开：取消置位，但 worker 未结束，锁必须保持占用。
+    scope.stream_exited()
+    assert scope.cancel_event.is_set()
+    assert session.lock.locked()
+
+    # worker 真正结束后释放；重复调用不产生第二次 release。
+    scope.worker_finished()
+    assert not session.lock.locked()
+    scope.worker_finished()
+    assert not session.lock.locked()
+
+
+def test_late_events_are_dropped_after_stream_exit():
+    """迟到事件合同：流退出后 emit 直接丢弃，不再进入队列。"""
+    import asyncio
+
+    import pragent.agent_api as agent_api
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        session = agent_api.WebAgentSession("late", store=None, embedder=None, llm=None)
+        scope = agent_api._TurnScope(session)
+        aq = asyncio.Queue()
+        emit = agent_api._sse_emitter(loop, aq, scope)
+
+        emit({"type": "session", "session_id": "late"})
+        scope.stream_exited()  # 模拟客户端断开
+        emit({"type": "assistant_delta", "text": "迟到事件"})
+        emit(None)
+
+        async def drain():
+            items = []
+            while not aq.empty():
+                items.append(await aq.get())
+            return items
+
+        events = asyncio.run_coroutine_threadsafe(drain(), loop).result(timeout=2)
+        assert events == [{"type": "session", "session_id": "late"}]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2)
+        loop.close()
+
+
+def test_disconnect_mid_turn_cancels_run_and_releases_lock(tmp_path):
+    """断开回合在阶段边界终止：run=cancelled、消息回到上一持久化边界。"""
+    import time as time_mod
+
+    import pragent.agent_api as agent_api
+
+    store = Store(tmp_path / "disc.db")
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingLLM:
+        is_configured = True
+        supports_streaming = False
+
+        def chat_with_tools(self, system, messages, tools):
+            started.set()
+            release.wait(timeout=5)
+            return {
+                "content": None,
+                "tool_calls": [{"id": "c1", "name": "list_papers", "arguments": {}}],
+            }
+
+    session = agent_api.WebAgentSession("disc", store, FakeEmbedder(), BlockingLLM())
+    store.ensure_agent_session("disc")  # 真实流程中由 registry 完成
+    assert session.lock.acquire(blocking=False)
+    scope = agent_api._TurnScope(session)
+    events = []
+    scope.bind_emitter(events.append)
+
+    agent_api._run_turn(session, events.append, objective="断开测试", scope=scope)
+    assert started.wait(timeout=2)
+    scope.stream_exited()  # 模拟 SSE 断开
+    assert scope.cancel_event.is_set()
+    assert session.lock.locked()  # worker 未结束，锁不得释放
+    release.set()
+
+    deadline = time_mod.time() + 5
+    while time_mod.time() < deadline and session.lock.locked():
+        time_mod.sleep(0.02)
+    assert not session.lock.locked()
+
+    runs = store.list_agent_runs()
+    assert len(runs) == 1
+    assert runs[0].status == "cancelled"
+    state = store.load_agent_session_state("disc")
+    # 半截回合不进入持久化边界；pending 不存在。
+    assert state["messages"] == []
+    assert state["pending_action"] is None
+    # 终态 complete 事件已生成（流断开时由 Store 记录兜底）。
+    assert any(
+        event.get("type") == "complete" and event.get("status") == "cancelled"
+        for event in events
+    )
+
+
+def test_confirm_disconnect_keeps_executed_tool_result(tmp_path, fake_write):
+    """确认续跑中断开：已执行副作用工具的 tool result 必须保留为终态。"""
+    import time as time_mod
+
+    import pragent.agent_api as agent_api
+
+    store = Store(tmp_path / "confirm-disc.db")
+    resume_started = threading.Event()
+    release = threading.Event()
+
+    class PhaseLLM:
+        is_configured = True
+        supports_streaming = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat_with_tools(self, system, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "需要写入。",
+                    "tool_calls": [
+                        {"id": "cw", "name": "fake_write", "arguments": {"text": "keep"}}
+                    ],
+                }
+            resume_started.set()
+            release.wait(timeout=5)
+            # 返回工具调用迫使进入下一轮，从而命中阶段边界取消检查。
+            return {
+                "content": None,
+                "tool_calls": [{"id": "c2", "name": "list_papers", "arguments": {}}],
+            }
+
+    session = agent_api.WebAgentSession("cd", store, FakeEmbedder(), PhaseLLM())
+    store.ensure_agent_session("cd")  # 真实流程中由 registry 完成
+    events = []
+
+    # 回合 1：产生待确认票据并完整停在 awaiting_confirmation 边界。
+    first_scope = agent_api._TurnScope(session)
+    first_scope.bind_emitter(events.append)
+    agent_api._run_turn(session, events.append, objective="写入", scope=first_scope)
+
+    def saw_awaiting_complete():
+        return any(
+            isinstance(event, dict)
+            and event.get("type") == "complete"
+            and event.get("status") == "awaiting_confirmation"
+            for event in events
+        )
+
+    deadline = time_mod.time() + 5
+    while time_mod.time() < deadline and not saw_awaiting_complete():
+        time_mod.sleep(0.02)
+    assert saw_awaiting_complete()
+    pending = session.ctx.pending_action
+    assert pending is not None and pending.name == "fake_write"
+
+    # 回合 2：确认续跑，在恢复的 LLM 调用阻塞期间模拟客户端断开。
+    second_scope = agent_api._TurnScope(session)
+    second_scope.bind_emitter(events.append)
+    agent_api._run_confirmation(
+        session, events.append, pending=pending, confirm=True, scope=second_scope
+    )
+    assert resume_started.wait(timeout=2)
+    second_scope.stream_exited()
+    assert second_scope.cancel_event.is_set()
+    release.set()
+
+    # 等待 run 终态与收尾 complete 事件（persist 在 finalize 之前完成）。
+    def terminal_complete():
+        runs = store.list_agent_runs()
+        done = bool(runs) and runs[0].status in _TERMINAL_RUN_STATUSES
+        complete = any(
+            isinstance(event, dict)
+            and event.get("type") == "complete"
+            and event.get("status") == "cancelled"
+            for event in events
+        )
+        return done and complete
+
+    deadline = time_mod.time() + 5
+    while time_mod.time() < deadline and not terminal_complete():
+        time_mod.sleep(0.02)
+    assert terminal_complete()
+
+    runs = store.list_agent_runs()
+    assert len(runs) == 1
+    assert runs[0].status == "cancelled"
+    state = store.load_agent_session_state("cd")
+    roles = [message["role"] for message in state["messages"]]
+    # 协议闭合、已执行工具的回执保留，绝不回滚成"从未发生"。
+    assert roles == ["user", "assistant", "tool", "assistant", "tool"]
+    assert state["messages"][2]["tool_call_id"] == "cw"
+    assert state["pending_action"] is None
+    assert _EXECUTED == ["keep"]

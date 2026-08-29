@@ -15,6 +15,12 @@
 
 会话、project 绑定、完整 transcript 与冻结的待确认票据由 Store 原子持久化；
 进程内仅保留最多 64 个热会话。服务重启后仍可安全地确认或取消同一动作。
+
+并发与断开合同：每回合持有会话排他锁，SSE 流提前断开（客户端关闭页面）
+只置位 ``_TurnScope.cancel_event``——worker 在阶段边界终止并把 run 转入
+``cancelled``、消息恢复到上一个持久化边界——排他锁等 worker 线程真正
+结束后才释放，因此断开不会让并发回合同时修改同一 session。断开后迟到
+的 SSE 事件在 emit 入口丢弃；终态以 Store 中的 run/session 记录为准。
 """
 import asyncio
 import json
@@ -26,7 +32,7 @@ from typing import Any, Callable, Optional
 from fastapi import HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from .chat import cancel_pending_run, chat_turn
+from .chat import TurnCancelled, cancel_pending_run, chat_turn
 from .tool_protocol import PendingAction
 from .tools import ToolContext, confirm_pending_action, pending_action_description
 
@@ -36,6 +42,67 @@ _MAX_SESSION_ID_CHARS = 128
 _MAX_TOOL_RESULT_CHARS = 500
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+class _TurnScope:
+    """一回合的取消与排他权协调。
+
+    SSE 流断开时 worker 可能仍在执行：排他锁必须等 worker 真正结束后才
+    释放，否则并发回合会同时修改同一 session（disconnect session race）。
+    断开时置位取消事件，worker 在阶段边界终止；迟到事件在 emit 入口
+    丢弃，run/session 终态由 worker 持久化到 Store。
+    """
+
+    def __init__(self, session: "WebAgentSession"):
+        self.session = session
+        self.cancel_event = threading.Event()
+        self._worker_done = threading.Event()
+        self._mutex = threading.Lock()
+        self._released = False
+        self._emit: Optional[Callable[[Optional[dict]], None]] = None
+
+    def bind_emitter(self, emit: Callable[[Optional[dict]], None]) -> None:
+        self._emit = emit
+
+    def request_cancel(self) -> None:
+        self.cancel_event.set()
+
+    def stream_exited(self) -> None:
+        """SSE 流结束（正常收尾或客户端断开）时调用。"""
+        self.request_cancel()
+        self._release()
+
+    def worker_finished(self) -> None:
+        """worker 线程真正结束：先标记完成并释放锁，再发送流终止哨兵。
+
+        先标记后发哨兵，保证正常路径下流退出时锁立即可以释放，客户端
+        收到完整响应后马上开始下一回合不会误撞 409。
+        """
+        self._worker_done.set()
+        self._release()
+        if self._emit is not None:
+            self._emit(None)
+
+    def _release(self) -> None:
+        with self._mutex:
+            if self._worker_done.is_set() and not self._released:
+                self._released = True
+                try:
+                    self.session.lock.release()
+                except RuntimeError:
+                    # 排他锁由端点在启动 worker 前获取；直接驱动 worker 的
+                    # 测试路径可能未获取锁，此时无需释放。
+                    pass
+
+
+def _finish_turn_scope(
+    scope: Optional[_TurnScope], emit: Callable[[Optional[dict]], None]
+) -> None:
+    """worker 收尾：优先走 scope（标记结束 + 释放锁 + 哨兵）。"""
+    if scope is not None:
+        scope.worker_finished()
+    else:
+        emit(None)
 
 
 class WebAgentSession:
@@ -309,7 +376,6 @@ def _finalize_turn(
             }
         )
         emit({"type": "complete", "status": "awaiting_confirmation"})
-        emit(None)
         return
     status = "done"
     error = None
@@ -319,7 +385,6 @@ def _finalize_turn(
             status = str(getattr(record, "status", "done"))
             error = getattr(record, "error", None)
     emit({"type": "complete", "status": status, "error": error})
-    emit(None)
 
 
 def _persist_session_state(
@@ -363,55 +428,98 @@ def _run_turn(
     emit: Callable[[Optional[dict]], None],
     *,
     objective: Optional[str] = None,
+    scope: Optional[_TurnScope] = None,
 ) -> None:
-    """在独立线程执行一轮受控对话，事件经 emit 压入 SSE 队列。"""
+    """在独立线程执行一轮受控对话，事件经 emit 压入 SSE 队列。
+
+    排他锁在 worker 线程真正结束（``scope.worker_finished``）时释放；
+    SSE 流提前断开只置位取消事件，不释放锁。客户端断开时回合在阶段
+    边界终止：消息恢复到上一个持久化边界，run 终态已由 chat_turn 写入
+    Store，迟到的 SSE 事件被丢弃。
+    """
     create_run = objective is not None
     resume_run_id = None if create_run else session.run_id
     previous_messages = list(session.messages)
 
     def worker() -> None:
-        if objective is not None:
-            # objective 用于 run 审计；用户问题仍必须进入模型消息上下文。
-            session.messages.append({"role": "user", "content": objective})
         try:
-            new_messages, logs = chat_turn(
-                session.ctx.llm,
-                session.messages,
-                session.ctx,
-                objective=objective,
-                create_run=create_run,
-                run_id=resume_run_id,
-                on_delta=lambda piece: emit(
-                    {"type": "assistant_delta", "text": piece}
-                ),
-                on_log=lambda entry: _emit_log(entry, emit),
-            )
+            if scope is not None:
+                # 绑定本轮全新取消事件；上一轮迟到的取消信号不会污染本轮。
+                session.ctx.cancel_event = scope.cancel_event
+            if objective is not None:
+                # objective 用于 run 审计；用户问题仍必须进入模型消息上下文。
+                session.messages.append({"role": "user", "content": objective})
+            try:
+                new_messages, logs = chat_turn(
+                    session.ctx.llm,
+                    session.messages,
+                    session.ctx,
+                    objective=objective,
+                    create_run=create_run,
+                    run_id=resume_run_id,
+                    on_delta=lambda piece: emit(
+                        {"type": "assistant_delta", "text": piece}
+                    ),
+                    on_log=lambda entry: _emit_log(entry, emit),
+                )
+            except TurnCancelled:
+                # 普通回合未产生副作用工具执行，恢复到上一个已持久化边界，
+                # 避免下次请求看到半截 user turn。
+                session.messages = previous_messages
+                _persist_session_state(session, emit)
+                emit(
+                    {
+                        "type": "complete",
+                        "status": "cancelled",
+                        "error": "客户端断开连接，回合在阶段边界终止",
+                    }
+                )
+                return
+            except Exception as exc:
+                # 普通新回合失败时恢复到上一个已持久化边界。确认续跑由调
+                # 用方负责保留已执行的 tool result。
+                session.messages = previous_messages
+                emit({"type": "error", "message": f"Agent 调用失败：{exc}"})
+                return
+            session.messages = new_messages
+            _persist_session_state(session, emit)
+            _finalize_turn(session, logs, emit)
         except Exception as exc:
-            # 普通新回合失败时恢复到上一个已持久化边界，避免下次请求看到
-            # 半截 user turn。确认续跑由调用方负责保留已执行的 tool result。
-            session.messages = previous_messages
-            emit({"type": "error", "message": f"Agent 调用失败：{exc}"})
-            emit(None)
-            return
-        session.messages = new_messages
-        _persist_session_state(session, emit)
-        _finalize_turn(session, logs, emit)
+            # 收尾自身故障也必须终止 SSE 流并最终释放排他锁。
+            emit(
+                {
+                    "type": "error",
+                    "message": f"Agent 回合异常终止：{exc}",
+                    "code": "turn_crashed",
+                }
+            )
+        finally:
+            # 标记 worker 结束并释放锁，最后发送流终止哨兵。
+            _finish_turn_scope(scope, emit)
 
     threading.Thread(target=worker, daemon=True).start()
 
 
 def _sse_endpoint(
     session: WebAgentSession,
-    aq: asyncio.Queue,
-    emit: Callable[[Optional[dict]], None],
     *,
-    start_worker: Callable[[Callable[[Optional[dict]], None]], None],
+    start_worker: Callable[
+        [Callable[[Optional[dict]], None], _TurnScope], None
+    ],
 ):
-    """构造一个 SSE 流：start_worker 启动后台线程，队列哨兵结束并释放会话锁。
+    """构造一个 SSE 流并接管回合排他权的最终释放。
 
-    ``emit`` 经 ``loop.call_soon_threadsafe`` 压入队列，可安全地从工作线程
-    调用；流在收到 ``None`` 哨兵（或客户端断开）时结束并释放会话锁。
+    ``start_worker(emit, scope)`` 启动后台线程。流在收到 ``None`` 哨兵或
+    客户端断开时结束：``scope.stream_exited`` 置位取消事件并尝试释放锁，
+    但排他锁保证等到 ``scope.worker_finished``（worker 真正结束）后才真正
+    释放。断开后迟到的 emit 事件在入口丢弃；终态由 worker 持久化到
+    run/session 记录，客户端重连后可从会话状态恢复。
     """
+    scope = _TurnScope(session)
+    loop = asyncio.get_running_loop()
+    aq: asyncio.Queue = asyncio.Queue()
+    emit = _sse_emitter(loop, aq, scope)
+    scope.bind_emitter(emit)
 
     async def stream():
         try:
@@ -421,26 +529,31 @@ def _sse_endpoint(
                     break
                 yield f"data: {_event_json(event)}\n\n"
         finally:
-            session.lock.release()
+            scope.stream_exited()
 
     try:
-        start_worker(emit)
+        start_worker(emit, scope)
     except Exception:
-        session.lock.release()
+        # worker 未启动成功也必须释放锁，否则会话永久 409。
+        _finish_turn_scope(scope, emit)
         raise
     return StreamingResponse(stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
-def _queue_and_emit(loop: asyncio.AbstractEventLoop) -> tuple[asyncio.Queue, Callable]:
-    aq: asyncio.Queue = asyncio.Queue()
-
+def _sse_emitter(
+    loop: asyncio.AbstractEventLoop,
+    aq: asyncio.Queue,
+    scope: _TurnScope,
+) -> Callable[[Optional[dict]], None]:
     def emit(event):
+        if scope.cancel_event.is_set():
+            return  # 流已结束/客户端断开：迟到事件直接丢弃
         try:
             loop.call_soon_threadsafe(aq.put_nowait, event)
         except RuntimeError:
-            pass  # 事件循环已关闭（客户端断开/服务停止），丢弃迟到事件
+            pass  # 事件循环已关闭（服务停止），丢弃迟到事件
 
-    return aq, emit
+    return emit
 
 
 def _session_from_payload(registry: _SessionRegistry, payload: dict) -> WebAgentSession:
@@ -457,6 +570,110 @@ def _session_from_payload(registry: _SessionRegistry, payload: dict) -> WebAgent
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return session
+
+
+def _run_confirmation(
+    session: WebAgentSession,
+    emit: Callable[[Optional[dict]], None],
+    *,
+    pending: PendingAction,
+    confirm: bool,
+    scope: Optional[_TurnScope] = None,
+) -> None:
+    """在独立线程执行确认/取消续跑；收尾合同与 ``_run_turn`` 一致。"""
+
+    def worker() -> None:
+        try:
+            if scope is not None:
+                session.ctx.cancel_event = scope.cancel_event
+            try:
+                if confirm:
+                    if not session.ctx.store.claim_pending_action(pending.action_id):
+                        emit(
+                            {
+                                "type": "error",
+                                "message": "待确认操作已被其他请求处理，请刷新会话状态。",
+                                "code": "confirmation_already_claimed",
+                            }
+                        )
+                        return
+                    name, result = confirm_pending_action(session.ctx)
+                    if not session.ctx.store.resolve_pending_action(
+                        pending.action_id, "executed", result=result
+                    ):
+                        raise RuntimeError("待确认操作已被其他请求处理")
+                    emit(
+                        {
+                            "type": "tool",
+                            "name": str(name),
+                            "args": {},
+                            "result": str(result)[:_MAX_TOOL_RESULT_CHARS],
+                            "code": "confirmed",
+                        }
+                    )
+                    confirmed = getattr(session.ctx, "last_confirmed_action", None)
+                    resume_run_id = (
+                        getattr(confirmed, "run_id", None)
+                        or getattr(pending, "run_id", None)
+                        or session.run_id
+                    )
+                    session.run_id = str(resume_run_id) if resume_run_id else session.run_id
+                    new_messages, logs = chat_turn(
+                        session.ctx.llm,
+                        session.messages,
+                        session.ctx,
+                        run_id=session.run_id,
+                        on_delta=lambda piece: emit(
+                            {"type": "assistant_delta", "text": piece}
+                        ),
+                        on_log=lambda entry: _emit_log(entry, emit),
+                    )
+                else:
+                    new_messages, logs = cancel_pending_run(
+                        session.messages,
+                        session.ctx,
+                        pending=pending,
+                        reason="用户在 Web 界面取消了待确认操作",
+                    )
+                    if not session.ctx.store.resolve_pending_action(
+                        pending.action_id, "rejected",
+                        error="用户在 Web 界面取消了待确认操作",
+                    ):
+                        raise RuntimeError("待确认操作已被其他请求处理")
+                session.messages = new_messages
+            except TurnCancelled:
+                # 确认可能已执行有副作用的工具：协议已闭合的 transcript 必须
+                # 保留，绝不回滚成"从未发生"。
+                _persist_session_state(session, emit)
+                emit(
+                    {
+                        "type": "complete",
+                        "status": "cancelled",
+                        "error": "客户端断开连接，回合在阶段边界终止",
+                    }
+                )
+                return
+            except Exception as exc:
+                # 确认可能已经执行了有副作用的工具。若协议已经闭合，必须
+                # 保存 tool result，避免重启后把已执行动作伪装成从未发生。
+                _persist_session_state(session, emit)
+                emit({"type": "error", "message": f"确认操作失败：{exc}"})
+                return
+            _persist_session_state(session, emit)
+            _finalize_turn(session, logs, emit)
+        except Exception as exc:
+            emit(
+                {
+                    "type": "error",
+                    "message": f"Agent 回合异常终止：{exc}",
+                    "code": "turn_crashed",
+                }
+            )
+        finally:
+            # 标记 worker 结束并释放锁，最后发送流终止哨兵。
+            _finish_turn_scope(scope, emit)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def register_agent_api(
@@ -480,14 +697,12 @@ def register_agent_api(
             )
         if not session.lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail="该会话正在处理中，请稍候")
-        loop = asyncio.get_running_loop()
-        aq, emit = _queue_and_emit(loop)
-        emit({"type": "session", "session_id": session.id})
 
-        def start_worker(emit):
-            _run_turn(session, emit, objective=question)
+        def start_worker(emit, scope):
+            emit({"type": "session", "session_id": session.id})
+            _run_turn(session, emit, objective=question, scope=scope)
 
-        return _sse_endpoint(session, aq, emit, start_worker=start_worker)
+        return _sse_endpoint(session, start_worker=start_worker)
 
     @app.post("/api/agent/confirm")
     async def api_agent_confirm(payload: dict):
@@ -501,81 +716,12 @@ def register_agent_api(
             raise HTTPException(status_code=400, detail="没有待确认的操作")
         if not session.lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail="该会话正在处理中，请稍候")
-        loop = asyncio.get_running_loop()
-        aq, emit = _queue_and_emit(loop)
-        emit({"type": "session", "session_id": session.id})
 
-        def start_worker(emit):
-            def worker():
-                try:
-                    if confirm:
-                        if not session.ctx.store.claim_pending_action(pending.action_id):
-                            emit(
-                                {
-                                    "type": "error",
-                                    "message": "待确认操作已被其他请求处理，请刷新会话状态。",
-                                    "code": "confirmation_already_claimed",
-                                }
-                            )
-                            emit(None)
-                            return
-                        name, result = confirm_pending_action(session.ctx)
-                        if not session.ctx.store.resolve_pending_action(
-                            pending.action_id, "executed", result=result
-                        ):
-                            raise RuntimeError("待确认操作已被其他请求处理")
-                        emit(
-                            {
-                                "type": "tool",
-                                "name": str(name),
-                                "args": {},
-                                "result": str(result)[:_MAX_TOOL_RESULT_CHARS],
-                                "code": "confirmed",
-                            }
-                        )
-                        confirmed = getattr(session.ctx, "last_confirmed_action", None)
-                        resume_run_id = (
-                            getattr(confirmed, "run_id", None)
-                            or getattr(pending, "run_id", None)
-                            or session.run_id
-                        )
-                        session.run_id = str(resume_run_id) if resume_run_id else session.run_id
-                        new_messages, logs = chat_turn(
-                            session.ctx.llm,
-                            session.messages,
-                            session.ctx,
-                            run_id=session.run_id,
-                            on_delta=lambda piece: emit(
-                                {"type": "assistant_delta", "text": piece}
-                            ),
-                            on_log=lambda entry: _emit_log(entry, emit),
-                        )
-                    else:
-                        new_messages, logs = cancel_pending_run(
-                            session.messages,
-                            session.ctx,
-                            pending=pending,
-                            reason="用户在 Web 界面取消了待确认操作",
-                        )
-                        if not session.ctx.store.resolve_pending_action(
-                            pending.action_id, "rejected",
-                            error="用户在 Web 界面取消了待确认操作",
-                        ):
-                            raise RuntimeError("待确认操作已被其他请求处理")
-                    session.messages = new_messages
-                except Exception as exc:
-                    # 确认可能已经执行了有副作用的工具。若协议已经闭合，必须
-                    # 保存 tool result，避免重启后把已执行动作伪装成从未发生。
-                    _persist_session_state(session, emit)
-                    emit({"type": "error", "message": f"确认操作失败：{exc}"})
-                    emit(None)
-                    return
-                _persist_session_state(session, emit)
-                _finalize_turn(session, logs, emit)
+        def start_worker(emit, scope):
+            emit({"type": "session", "session_id": session.id})
+            _run_confirmation(session, emit, pending=pending, confirm=confirm, scope=scope)
 
-            threading.Thread(target=worker, daemon=True).start()
-
-        return _sse_endpoint(session, aq, emit, start_worker=start_worker)
+        return _sse_endpoint(session, start_worker=start_worker)
 
     @app.get("/api/agent/sessions/{session_id}")
     def api_agent_session(session_id: str):

@@ -153,7 +153,7 @@ def test_web_search(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ws_mod,
         "search_papers",
-        lambda q, limit: [
+        lambda q, limit, timeout=None: [
             ws_mod.WebPaper(
                 title="A Survey", authors=["A"], year=2025, abstract="abs",
                 url="http://arxiv.org/abs/2501.1", pdf_url=None,
@@ -169,7 +169,7 @@ def test_web_search_failure(monkeypatch, tmp_path):
     from pragent import websearch as ws_mod
     from pragent.tools import ToolContext
 
-    def boom(q, limit):
+    def boom(q, limit, timeout=None):
         raise ws_mod.WebSearchError("超时")
 
     monkeypatch.setattr(ws_mod, "search_papers", boom)
@@ -229,7 +229,7 @@ def test_web_search_requires_confirmation_before_external_request(monkeypatch, t
     from pragent.tools import confirm_pending_action
 
     calls = []
-    monkeypatch.setattr(ws_mod, "search_papers", lambda q, limit: calls.append(q) or [])
+    monkeypatch.setattr(ws_mod, "search_papers", lambda q, limit, timeout=None: calls.append(q) or [])
     ctx = make_ctx(tmp_path)
     ctx.require_confirmation = True
 
@@ -751,3 +751,176 @@ def test_outline_and_page_reading_have_hard_output_limits(tmp_path):
     )
     assert too_many_pages.ok is False
     assert too_many_pages.code == "page_range_too_large"
+
+
+# ---------- Step 26：deadline/cancel 工具执行预算合同 ----------
+
+
+def _register_probe_tool(name, handler, *, idempotent=True):
+    register_tool(
+        ToolSpec(
+            name=name,
+            description="测试预算合同",
+            parameters={"type": "object", "properties": {}},
+            handler=handler,
+            effects=frozenset({ToolEffect.READ_LOCAL}),
+            timeout_seconds=2.0,
+            idempotent=idempotent,
+        )
+    )
+
+
+def test_run_handler_installs_deadline_and_restores_context(tmp_path):
+    seen = {}
+
+    def probe(ctx):
+        seen["deadline"] = ctx.deadline
+        seen["remaining"] = ctx.remaining_seconds()
+        seen["runnable"] = ctx.is_runnable()
+        return ToolResult.success(message="ok")
+
+    _register_probe_tool("deadline_probe", probe)
+    try:
+        ctx = make_ctx(tmp_path)
+        assert ctx.deadline is None
+        result = execute_tool_result("deadline_probe", {}, ctx)
+        assert result.ok
+        assert seen["deadline"] is not None
+        assert 0 < seen["remaining"] <= 2.0
+        assert seen["runnable"] is True
+        # 执行结束后恢复原状，不污染下一次调用。
+        assert ctx.deadline is None
+    finally:
+        unregister_tool("deadline_probe")
+
+
+def test_deadline_exceeded_result_follows_idempotency(tmp_path):
+    import time as time_mod
+
+    def expired(ctx):
+        # 模拟 handler 合作式检查：预算已耗尽时主动停止。
+        ctx.deadline = time_mod.monotonic() - 0.01
+        ctx.check_deadline()
+
+    _register_probe_tool("expired_idempotent", expired, idempotent=True)
+    _register_probe_tool("expired_mutating", expired, idempotent=False)
+    try:
+        ctx = make_ctx(tmp_path)
+        result = execute_tool_result("expired_idempotent", {}, ctx)
+        assert result.ok is False
+        assert result.code == "tool_deadline_exceeded"
+        assert result.retryable is True
+
+        mutating = execute_tool_result("expired_mutating", {}, ctx)
+        assert mutating.code == "tool_deadline_exceeded"
+        # 非幂等工具超时后副作用未知，不允许自动重试。
+        assert mutating.retryable is False
+    finally:
+        unregister_tool("expired_idempotent")
+        unregister_tool("expired_mutating")
+
+
+def test_cancel_event_stops_cooperative_tool(tmp_path):
+    import threading
+
+    def cancellable(ctx):
+        ctx.check_cancelled()
+        return ToolResult.success(message="不应到达")
+
+    _register_probe_tool("cancellable_probe", cancellable, idempotent=True)
+    try:
+        ctx = make_ctx(tmp_path)
+        result = execute_tool_result("cancellable_probe", {}, ctx)
+        assert result.ok is True  # 未取消时正常执行
+
+        ctx.cancel_event = threading.Event()
+        ctx.cancel_event.set()
+        cancelled = execute_tool_result("cancellable_probe", {}, ctx)
+        assert cancelled.ok is False
+        assert cancelled.code == "tool_cancelled"
+        assert cancelled.retryable is True
+    finally:
+        unregister_tool("cancellable_probe")
+
+
+def test_web_search_uses_remaining_budget_as_network_timeout(tmp_path, monkeypatch):
+    import time as time_mod
+
+    from pragent import websearch as ws_mod
+
+    captured = {}
+
+    def fake_search(query, limit=5, timeout=None):
+        captured["timeout"] = timeout
+        return []
+
+    monkeypatch.setattr(ws_mod, "search_papers", fake_search)
+    ctx = make_ctx(tmp_path)
+
+    # 默认预算为 web_search 的 spec 超时（30 秒）。
+    execute_tool("web_search", {"query": "default budget"}, ctx)
+    assert captured["timeout"] is not None
+    assert 0 < captured["timeout"] <= 30.0
+
+    # 剩余预算收紧时，网络超时随之收紧。
+    ctx.deadline = time_mod.monotonic() + 4.0
+    execute_tool("web_search", {"query": "with deadline"}, ctx)
+    assert captured["timeout"] is not None
+    assert 0 < captured["timeout"] <= 4.0
+
+
+def test_download_paper_passes_remaining_budget(tmp_path, monkeypatch):
+    import time as time_mod
+
+    from pragent import download as dl_mod
+
+    captured = {}
+
+    def fake_download(url, target_dir, timeout=60):
+        captured["timeout"] = timeout
+        target = target_dir / "2402.11651.pdf"
+        target.write_bytes(b"%PDF-1.7 fake " * 50)
+        return target
+
+    monkeypatch.setattr(dl_mod, "download_pdf", fake_download)
+    monkeypatch.setattr(
+        "pragent.indexer.index_pdf",
+        lambda store, path, embedder, **kw: {
+            "added": 1, "updated": 0, "unchanged": 0, "failed": 0
+        },
+    )
+    monkeypatch.setattr("pragent.config.download_dir_override", lambda: None)
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    ctx = make_ctx(tmp_path, library_dir=lib)
+    ctx.deadline = time_mod.monotonic() + 120.0
+    execute_tool("download_paper", {"url": "https://arxiv.org/abs/2402.11651"}, ctx)
+    # 下载 I/O 同样消费剩余预算而非固定超时。
+    assert captured["timeout"] is not None
+    assert 0 < captured["timeout"] <= 120.0
+
+
+def test_index_papers_stops_when_cancelled(tmp_path, monkeypatch):
+    import threading
+
+    ctx = make_ctx(tmp_path, library_dir=tmp_path / "lib")
+    (tmp_path / "lib").mkdir()
+    monkeypatch.setattr(
+        "pragent.indexer.index_library",
+        lambda store, target, embedder, *, progress=None, should_continue=None: {
+            "added": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "failed": 0,
+            "removed": 0,
+            "skipped_no_text": 0,
+            "cancelled": should_continue is not None and not should_continue(),
+        },
+    )
+    ctx.cancel_event = threading.Event()
+    ctx.cancel_event.set()
+    result = execute_tool_result("index_papers", {}, ctx)
+    assert result.ok is False
+    assert result.code == "tool_cancelled"
+    assert result.retryable is True
+    assert result.data["cancelled"] is True

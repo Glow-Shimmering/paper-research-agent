@@ -336,7 +336,12 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
   - 工具预算：`ToolInterrupted` + `ToolContext.deadline/cancel_event` 合同；`_run_handler` 按 `timeout_seconds` 安装单调时钟 deadline（与外层预算取更紧者）并在结束后恢复；`web_search`/`download_paper` 把剩余预算作为真实网络超时传入，`index_library` 新增 `should_continue` 逐篇检查（取消后已处理部分以一致事务提交，`cancelled` 置入结果）；无 future 伪超时。
   - 验证：新增 `tests/test_agent_web.py` 4 个断开竞态合同（scope 锁语义、迟到事件丢弃、chat/confirm 断开终态）与 `tests/test_tools.py` 6 个预算合同（deadline 安装/恢复、幂等→retryable 映射、取消停止、web_search/download 剩余预算、index 取消）；Windows 完整回归 `400 passed, 1 skipped`，临时目录 91 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check（含隔离 venv 安装 `pra --version` smoke）全部通过。
   - 提交前安全审查修复：arXiv/Semantic Scholar/Crossref/arXiv PDF 下载统一改走 `safe_fetch.pinned_get` 单跳 SSRF 防护（协议/凭据/私网地址校验 + DNS pinning + 主机白名单 + 有界同主机重定向），arXiv Atom 解析拒绝 DTD/实体声明，`import_pagent`/`migrations` 的列检查改用可绑定参数的 `pragma_table_info(?)`、旧库指纹改为固定 SQL 白名单并对未知表 fail closed，测试假 key 改为显式非凭据占位值；`test_websearch`/`test_download` 迁移到新注入 seam 并新增 5 个 SSRF/DTD 合同。
-- [ ] Step 27：完成 Dashboard、Evidence & Notes、job center、空状态、错误提示、中文帮助和响应式样式；HTMX/JS 全部随 wheel 本地打包。
+- [x] Step 27：完成 Dashboard、Evidence & Notes、job center、空状态、错误提示、中文帮助和响应式样式；HTMX/JS 全部随 wheel 本地打包。
+  - Dashboard（`/ui/`）：项目、最近来源、进行中任务与库统计卡片，每区块带中文空状态引导；顶栏新增工作台/任务中心/帮助导航与页脚隐私提示（本地 SQLite + 云端模型仅接收问题与选中文本）。
+  - Job center（`/ui/jobs`）：全局任务列表、状态筛选 chip、HTMX 每 3 秒轮询 fragment、进度条与失败信息展示；支持对 queued/running/interrupted 任务请求取消（JSON `POST /api/v1/jobs/{id}/cancellation` 与 UI 表单均走版本 CAS，冲突返回 409）。
+  - Evidence & Notes（`/ui/projects/{id}/evidence`）：聚合项目产物当前 revision 引用的证据（evidence_id/field_path/页码/定位/stale 徽标/预览，locator 只含文件名或 canonical URI），笔记支持项目/来源级创建与版本化编辑（`/api/v1/projects/{id}/notes` + HTMX fragment，CAS 冲突显式报错）。
+  - 帮助页（`/ui/help`）：三条核心工作流、任务与恢复说明、隐私与安全边界（含 citation scope 不等于语义蕴含的提示）；error 页增加工作台/任务中心出口。
+  - 验证：新增 `tests/test_dashboard_web.py` 7 个合同（空状态/帮助、Dashboard 聚合、任务 JSON/取消流、UI 取消 CSRF 与轮询、笔记 JSON CAS、笔记 UI CSRF、证据页与主机路径脱敏）；Windows 完整回归 `407 passed, 1 skipped`，临时目录 93 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check（新增模板列入 REQUIRED 并通过隔离安装 smoke）全部通过；提交前 Mimosa normal 深度静态审计完成（findingCount=0）。
 - [ ] Step 28：增加 deterministic product scenarios、live DeepSeek/manual provider smoke、质量 rubric、隐私/安全审查和数据备份恢复演练。
 - [ ] Step 29：更新 README/架构/工作流/数据模型/安全/评估文档，构建 wheel，并完成从空目录安装到 `pra serve` 的发布验收。
 

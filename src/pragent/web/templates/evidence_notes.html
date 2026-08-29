@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}证据与笔记 · {{ project.title }} · PRAgent{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow"><a href="/ui/projects/{{ project.id }}">{{ project.title }}</a> · Evidence &amp; Notes</p>
+    <h1>证据与笔记</h1>
+    <p>项目产物引用的证据与其上的研究笔记。</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-title">
+    <h2>项目证据</h2>
+    <span>{{ evidence_items|length }} 条 · 来自当前产物 revision 的引用</span>
+  </div>
+  {% if evidence_items %}
+  <div class="evidence-grid">
+    {% for item in evidence_items %}
+    <article class="evidence-card{% if item.stale %} stale{% endif %}">
+      <header>
+        <code>{{ item.evidence_id }}</code>
+        {% if item.stale %}<span class="badge status failed">stale</span>{% else %}<span class="badge status ready">当前</span>{% endif %}
+      </header>
+      <p class="muted">
+        {{ item.artifact_type }} · {{ item.field_path }}
+        {% if item.page %} · 第 {{ item.page }} 页{% endif %}
+        {% if item.locator %} · {{ item.locator }}{% endif %}
+      </p>
+      <blockquote>{{ item.preview }}{% if item.preview|length == 300 %}…{% endif %}</blockquote>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p><strong>还没有被产物引用的证据。</strong></p>
+    <p>生成精读卡、比较矩阵或综述章节后，其引用的证据会集中显示在这里，并随来源更新标记 stale。</p>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel" id="notes-panel">
+  {% include "fragments/notes_panel.html" %}
+</section>
+{% endblock %}

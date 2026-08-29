@@ -5,6 +5,9 @@
   <p class="eyebrow">Request failed</p>
   <h1>操作未完成</h1>
   <p>{{ message }}</p>
-  <p><a href="/ui/projects">返回项目列表</a></p>
+  <p class="error-next-steps">
+    可以返回 <a href="/ui/">工作台</a>、<a href="/ui/projects">项目列表</a> 或
+    <a href="/ui/jobs">任务中心</a> 查看当前状态；若为版本冲突，请刷新页面后重试。
+  </p>
 </section>
 {% endblock %}

@@ -9,16 +9,22 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/ui/projects">PRAgent</a>
+    <a class="brand" href="/ui/">PRAgent</a>
     <nav>
+      <a href="/ui/">工作台</a>
       <a href="/ui/projects">研究项目</a>
       <a href="/ui/discover">发现</a>
       <a href="/ui/library">来源库</a>
+      <a href="/ui/jobs">任务中心</a>
+      <a href="/ui/help">帮助</a>
       <a href="/">兼容工作台</a>
     </nav>
   </header>
   <main class="page">
     {% block content %}{% endblock %}
   </main>
+  <footer class="page-footer">
+    <span>数据保存在本机 SQLite；云端模型仅接收问题与选中文本片段。<a href="/ui/help">安全边界说明</a></span>
+  </footer>
 </body>
 </html>

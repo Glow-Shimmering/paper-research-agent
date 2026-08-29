@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}工作台 · PRAgent{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Research dashboard</p>
+    <h1>研究工作台</h1>
+    <p>项目、来源与生成任务的统一入口；所有数据保存在本机 SQLite。</p>
+  </div>
+  <div class="stat-row">
+    <span class="stat"><strong>{{ paper_count }}</strong> 篇论文</span>
+    <span class="stat"><strong>{{ chunk_count }}</strong> 个分块</span>
+    <span class="stat"><strong>{{ active_jobs|length }}</strong> 个进行中任务</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-title">
+    <h2>研究项目</h2>
+    <span>{{ project_total }} 个 · <a href="/ui/projects">管理项目</a></span>
+  </div>
+  {% if projects %}
+  <div class="project-grid">
+    {% for project in projects %}
+    <a class="project-card" href="/ui/projects/{{ project.id }}">
+      <strong>{{ project.title }}</strong>
+      <span>{{ project.description or "暂无说明" }}</span>
+      <small>{{ project.status }} · v{{ project.version }}</small>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p><strong>还没有研究项目。</strong></p>
+    <p>前往 <a href="/ui/projects">研究项目</a> 创建第一个项目，再从来源库选择论文。</p>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="section-title">
+    <h2>最近来源</h2>
+    <span>{{ source_total }} 条 · <a href="/ui/library">打开来源库</a></span>
+  </div>
+  {% if sources %}
+  <ul class="source-list">
+    {% for source in sources %}
+    <li>
+      <strong>{{ source.title or source.canonical_key }}</strong>
+      <span>{{ source.source_kind }} · {{ source.status }}{% if source.year %} · {{ source.year }}{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <p><strong>来源库为空。</strong></p>
+    <p>去 <a href="/ui/discover">发现</a> 搜索 arXiv / Semantic Scholar / Crossref，或在终端运行 <code>pra index &lt;论文目录&gt;</code> 导入本地 PDF。</p>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="section-title">
+    <h2>进行中任务</h2>
+    <span><a href="/ui/jobs">打开任务中心</a></span>
+  </div>
+  {% if active_jobs %}
+  <ul class="source-list">
+    {% for job in active_jobs %}
+    <li>
+      <strong>{{ type_labels.get(job.job_type, job.job_type) }}</strong>
+      <span class="badge status {{ job.status }}">{{ job.status }}</span>
+      <span>进度 {{ job.progress_current }}{% if job.progress_total %}/{{ job.progress_total }}{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <p><strong>当前没有进行中的任务。</strong></p>
+    <p>精读、比较、综述与导出任务会出现在这里，可在任务中心查看历史与取消。</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

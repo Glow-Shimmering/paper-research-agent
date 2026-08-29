@@ -100,3 +100,34 @@ button.compact { padding: 6px 9px; font-size: 12px; }
 .export-preview { max-height: 70vh; margin: 0; padding: 16px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #f8fafc; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
 @media (max-width: 800px) { .workspace-grid, .review-layout { grid-template-columns: 1fr; } .review-preview { position: static; max-height: none; } .question-edit { grid-template-columns: 62px minmax(0, 1fr); } .question-edit button { grid-column: 2; } }
 @media (max-width: 560px) { .topbar { height: auto; min-height: 58px; padding: 10px 16px; gap: 10px; flex-wrap: wrap; } .topbar nav { width: 100%; gap: 12px; overflow-x: auto; white-space: nowrap; } .page { width: min(100% - 20px, 1120px); margin-top: 18px; } .panel { padding: 16px; } .hero, .section-heading { align-items: flex-start; flex-direction: column; } .editable-item { grid-template-columns: 1fr; } .paper-row { align-items: flex-start; flex-direction: column; } }
+
+/* ---------- Step 27：Dashboard / 任务中心 / 证据与笔记 / 帮助 ---------- */
+.page-footer { width: min(1120px, calc(100% - 32px)); margin: 0 auto 24px; color: var(--muted); font-size: 12px; display: flex; justify-content: center; }
+.page-footer span { padding: 8px 14px; background: #f0f2f5; border-radius: 999px; }
+.stat-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.stat { padding: 8px 13px; background: #fff; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; }
+.stat strong { color: var(--ink); font-size: 16px; margin-right: 4px; }
+.status-filter { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-chip { padding: 6px 12px; background: #fff; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 13px; }
+.filter-chip.active { background: var(--soft); border-color: #9dadf2; color: #3449a7; font-weight: 700; }
+.job-list { margin: 0; padding: 0; display: grid; gap: 10px; list-style: none; }
+.job-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; padding: 12px; background: #f8fafc; border-radius: 10px; }
+.job-main { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.job-main progress { width: 180px; max-width: 40vw; }
+.job-meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.job-meta small { color: var(--muted); }
+.job-cancel { align-self: center; }
+.evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.evidence-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; }
+.evidence-card.stale { border-color: #fecdca; background: #fffbfa; }
+.evidence-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.evidence-card blockquote { margin: 0; padding: 10px 12px; background: #f8fafc; border-left: 3px solid var(--primary, var(--brand)); border-radius: 8px; font-size: 13px; white-space: pre-wrap; }
+.note-list { margin: 14px 0 0; padding: 0; display: grid; gap: 10px; list-style: none; }
+.note-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.note-card summary { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; cursor: pointer; }
+.note-content { margin: 10px 0; padding: 10px 12px; background: #f8fafc; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.note-edit { border-top: 1px dashed var(--line); padding-top: 10px; }
+.help-steps, .help-list { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 10px; }
+.help-steps li::marker { color: var(--brand); font-weight: 700; }
+.error-next-steps { color: var(--muted); font-size: 14px; }
+@media (max-width: 560px) { .stat-row { width: 100%; } .job-row { grid-template-columns: 1fr; } .job-cancel { justify-self: start; } }

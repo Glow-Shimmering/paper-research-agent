@@ -1,0 +1,51 @@
+<div class="section-title">
+  <h2>研究笔记</h2>
+  <span>{{ notes|length }} 条</span>
+</div>
+
+<form method="post" action="/ui/projects/{{ project.id }}/notes"
+      hx-post="/ui/projects/{{ project.id }}/notes" hx-target="#notes-panel" hx-swap="innerHTML"
+      class="stack-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>标题<input name="title" maxlength="200" placeholder="例如：评测方法的关键质疑"></label>
+  <label>归属
+    <select name="scope_source">
+      <option value="">项目</option>
+      {% for membership in memberships %}
+      <option value="{{ membership.source.id }}">{{ membership.source.title or membership.source.canonical_key }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>内容（Markdown）<textarea name="content_markdown" rows="4" maxlength="100000" placeholder="记录阅读心得、质疑或待核对的问题"></textarea></label>
+  <button type="submit">保存笔记</button>
+</form>
+
+{% if notes %}
+<ul class="note-list">
+  {% for note in notes %}
+  <li class="note-card">
+    <details{% if loop.first %} open{% endif %}>
+      <summary>
+        <strong>{{ note.title or "无标题笔记" }}</strong>
+        <span class="muted">{{ note.scope_kind }} · v{{ note.version }} · {{ note.updated_at }}</span>
+      </summary>
+      <pre class="note-content">{{ note.content_markdown or "（空）" }}</pre>
+      <form method="post" action="/ui/projects/{{ project.id }}/notes/{{ note.id }}"
+            hx-post="/ui/projects/{{ project.id }}/notes/{{ note.id }}" hx-target="#notes-panel" hx-swap="innerHTML"
+            class="stack-form note-edit">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="expected_version" value="{{ note.version }}">
+        <label>标题<input name="title" maxlength="200" value="{{ note.title }}"></label>
+        <label>内容（Markdown）<textarea name="content_markdown" rows="4" maxlength="100000">{{ note.content_markdown }}</textarea></label>
+        <button type="submit" class="compact">保存修改（版本 {{ note.version }} → {{ note.version + 1 }}）</button>
+      </form>
+    </details>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty-state">
+  <p><strong>还没有研究笔记。</strong></p>
+  <p>笔记可以挂在项目或具体来源上，用于记录阅读心得与待核对的问题；编辑会保留版本历史。</p>
+</div>
+{% endif %}

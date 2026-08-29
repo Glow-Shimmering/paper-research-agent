@@ -365,6 +365,106 @@ def register_project_routes(
         except (SourceIdentityConflictError, ValueError) as exc:
             return _render_error(templates, request, str(exc), status_code=409)
 
+    # ---------- research notes ----------
+
+    @app.get("/api/v1/projects/{project_id}/notes")
+    def api_project_notes(
+        project_id: str,
+        source_id: Optional[str] = Query(None, max_length=128),
+        evidence_id: Optional[str] = Query(None, max_length=128),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
+        repository = repository_factory()
+        _require_project(repository, project_id)
+        page = repository.list_notes(
+            project_id, source_id=source_id, evidence_id=evidence_id,
+            limit=limit, offset=offset,
+        )
+        return {
+            "total": page.total,
+            "limit": page.limit,
+            "offset": page.offset,
+            "items": [_note_dict(note) for note in page.items],
+        }
+
+    @app.post("/api/v1/projects/{project_id}/notes", status_code=201)
+    def api_create_note(project_id: str, payload: dict):
+        repository = repository_factory()
+        _require_project(repository, project_id)
+        try:
+            note = repository.create_note(
+                project_id,
+                scope_kind=str((payload or {}).get("scope_kind") or "project"),
+                source_id=(payload or {}).get("source_id"),
+                evidence_id=(payload or {}).get("evidence_id"),
+                title=str((payload or {}).get("title") or ""),
+                content_markdown=str((payload or {}).get("content_markdown") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _note_dict(note)
+
+    @app.patch("/api/v1/projects/{project_id}/notes/{note_id}")
+    def api_update_note(project_id: str, note_id: str, payload: dict):
+        repository = repository_factory()
+        _require_note(repository, project_id, note_id)
+        expected_version = _required_int(payload, "expected_version")
+        fields = {
+            key: payload[key]
+            for key in ("title", "content_markdown")
+            if key in (payload or {})
+        }
+        try:
+            note = repository.update_note(note_id, expected_version=expected_version, **fields)
+        except RecordVersionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _note_dict(note)
+
+    @app.post("/ui/projects/{project_id}/notes")
+    async def ui_create_note(request: Request, project_id: str):
+        form = await _validated_form(request)
+        repository = repository_factory()
+        source_id = form.get("scope_source") or None
+        try:
+            repository.create_note(
+                project_id,
+                scope_kind="source" if source_id else "project",
+                source_id=source_id,
+                title=form.get("title", ""),
+                content_markdown=form.get("content_markdown", ""),
+            )
+        except KeyError as exc:
+            return _render_error(
+                templates, request, _exception_message(exc), status_code=404
+            )
+        except ValueError as exc:
+            return _render_error(templates, request, str(exc), status_code=400)
+        return _notes_response(templates, request, repository, project_id)
+
+    @app.post("/ui/projects/{project_id}/notes/{note_id}")
+    async def ui_update_note(request: Request, project_id: str, note_id: str):
+        form = await _validated_form(request)
+        repository = repository_factory()
+        try:
+            expected_version = _form_int(form, "expected_version", minimum=1)
+            _require_note(repository, project_id, note_id)
+            repository.update_note(
+                note_id,
+                expected_version=expected_version,
+                title=form.get("title", ""),
+                content_markdown=form.get("content_markdown", ""),
+            )
+        except KeyError as exc:
+            return _render_error(
+                templates, request, _exception_message(exc), status_code=404
+            )
+        except RecordVersionConflictError as exc:
+            return _render_error(templates, request, str(exc), status_code=409)
+        except ValueError as exc:
+            return _render_error(templates, request, str(exc), status_code=400)
+        return _notes_response(templates, request, repository, project_id)
+
 
 def _workspace_context(repository, store, project_id: str) -> dict[str, Any]:
     project = repository.get_project(project_id)
@@ -412,6 +512,39 @@ def _sources_response(templates, request, repository, store, project_id):
         return RedirectResponse(f"/ui/projects/{project_id}", status_code=303)
     context = _workspace_context(repository, store, project_id)
     return _render(templates, request, "fragments/sources.html", context)
+
+
+def _notes_response(templates, request, repository, project_id):
+    if not _is_htmx(request):
+        return RedirectResponse(
+            f"/ui/projects/{project_id}/evidence", status_code=303
+        )
+    return _render(
+        templates,
+        request,
+        "fragments/notes_panel.html",
+        _notes_context(repository, project_id),
+    )
+
+
+def _notes_context(repository, project_id: str) -> dict[str, Any]:
+    project = _require_project(repository, project_id)
+    memberships = repository.list_project_sources(
+        project_id, limit=200, offset=0
+    ).items
+    return {
+        "project": project,
+        "notes": repository.list_notes(project_id, limit=100, offset=0).items,
+        "memberships": memberships,
+    }
+
+
+def _require_note(repository, project_id: str, note_id: str):
+    note = repository.list_notes(project_id, limit=200, offset=0)
+    for item in note.items:
+        if item.id == note_id:
+            return item
+    raise KeyError("研究笔记不属于当前项目")
 
 
 def _render(
@@ -586,6 +719,21 @@ def _membership_dict(membership: ProjectSourceMembership) -> dict[str, Any]:
             "status": source.status,
             "indexed_paper_id": source.indexed_paper_id,
         },
+    }
+
+
+def _note_dict(note) -> dict[str, Any]:
+    return {
+        "id": note.id,
+        "project_id": note.project_id,
+        "scope_kind": note.scope_kind,
+        "source_id": note.source_id,
+        "evidence_id": note.evidence_id,
+        "title": note.title,
+        "content_markdown": note.content_markdown,
+        "version": note.version,
+        "created_at": note.created_at,
+        "updated_at": note.updated_at,
     }
 
 

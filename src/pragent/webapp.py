@@ -51,6 +51,7 @@ from .store import Store
 from .web.routes import (
     register_artifact_routes,
     register_comparison_routes,
+    register_dashboard_routes,
     register_export_routes,
     register_project_routes,
     register_review_routes,
@@ -748,6 +749,13 @@ def create_app(
         app,
         store_factory=_store,
         repository_factory=_research_repository,
+        templates_directory=_web_resource_directory("templates"),
+    )
+    register_dashboard_routes(
+        app,
+        repository_factory=_research_repository,
+        job_queue_factory=_job_queue,
+        store_factory=_store,
         templates_directory=_web_resource_directory("templates"),
     )
     register_artifact_routes(

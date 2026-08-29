@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}任务中心 · PRAgent{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Job center</p>
+    <h1>任务中心</h1>
+    <p>精读、比较、综述与导出等后台任务的状态、进度与历史。</p>
+  </div>
+  <nav class="status-filter" aria-label="状态筛选">
+    <a class="filter-chip{% if not status_filter %} active{% endif %}" href="/ui/jobs">全部</a>
+    {% for status_name in job_statuses %}
+    <a class="filter-chip{% if status_filter == status_name %} active{% endif %}" href="/ui/jobs?status={{ status_name }}">{{ status_name }}</a>
+    {% endfor %}
+  </nav>
+</section>
+<section class="panel"
+         id="job-panel"
+         hx-get="/ui/jobs/fragment{% if status_filter %}?status={{ status_filter }}{% endif %}"
+         hx-trigger="every 3s"
+         hx-swap="innerHTML">
+  {% include "fragments/job_list.html" %}
+</section>
+{% endblock %}

@@ -1,0 +1,39 @@
+<div class="section-title">
+  <h2>任务列表</h2>
+  <span>{{ job_total }} 项{% if status_filter %} · 筛选 {{ status_filter }}{% endif %}</span>
+</div>
+{% if jobs %}
+<ul class="job-list">
+  {% for job in jobs %}
+  <li class="job-row">
+    <div class="job-main">
+      <strong>{{ type_labels.get(job.job_type, job.job_type) }}</strong>
+      <span class="badge status {{ job.status }}">{{ job.status }}</span>
+      {% if job.status == 'running' and job.progress_total %}
+      <progress max="{{ job.progress_total }}" value="{{ job.progress_current }}"></progress>
+      {% endif %}
+      <small>{{ job.progress_current }}{% if job.progress_total %}/{{ job.progress_total }}{% endif %}</small>
+    </div>
+    <div class="job-meta">
+      <small>创建 {{ job.created_at }}{% if job.started_at %} · 开始 {{ job.started_at }}{% endif %}{% if job.finished_at %} · 结束 {{ job.finished_at }}{% endif %}</small>
+      {% if job.error_message %}<span class="error-inline">{{ job.error_message }}</span>{% endif %}
+    </div>
+    {% if job.status in ('queued', 'running', 'interrupted') and not job.cancel_requested %}
+    <form class="job-cancel" method="post" action="/ui/jobs/{{ job.id }}/cancel"
+          hx-post="/ui/jobs/{{ job.id }}/cancel" hx-target="#job-panel" hx-swap="innerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="expected_version" value="{{ job.version }}">
+      <button type="submit" class="compact">请求取消</button>
+    </form>
+    {% elif job.cancel_requested %}
+    <span class="muted">取消已请求，将在阶段边界停止</span>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty-state">
+  <p><strong>没有符合条件的任务。</strong></p>
+  <p>在项目工作区发起精读、比较、综述或导出后，任务会出现在这里并实时更新。</p>
+</div>
+{% endif %}

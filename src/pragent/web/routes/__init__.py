@@ -2,6 +2,7 @@
 
 from .artifacts import register_artifact_routes
 from .comparisons import register_comparison_routes
+from .dashboard import register_dashboard_routes
 from .discovery import register_discovery_routes
 from .exports import register_export_routes
 from .projects import register_project_routes
@@ -10,6 +11,7 @@ from .reviews import register_review_routes
 __all__ = [
     "register_artifact_routes",
     "register_comparison_routes",
+    "register_dashboard_routes",
     "register_discovery_routes",
     "register_export_routes",
     "register_project_routes",

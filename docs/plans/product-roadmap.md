@@ -342,7 +342,14 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
   - Evidence & Notes（`/ui/projects/{id}/evidence`）：聚合项目产物当前 revision 引用的证据（evidence_id/field_path/页码/定位/stale 徽标/预览，locator 只含文件名或 canonical URI），笔记支持项目/来源级创建与版本化编辑（`/api/v1/projects/{id}/notes` + HTMX fragment，CAS 冲突显式报错）。
   - 帮助页（`/ui/help`）：三条核心工作流、任务与恢复说明、隐私与安全边界（含 citation scope 不等于语义蕴含的提示）；error 页增加工作台/任务中心出口。
   - 验证：新增 `tests/test_dashboard_web.py` 7 个合同（空状态/帮助、Dashboard 聚合、任务 JSON/取消流、UI 取消 CSRF 与轮询、笔记 JSON CAS、笔记 UI CSRF、证据页与主机路径脱敏）；Windows 完整回归 `407 passed, 1 skipped`，临时目录 93 MB；`pip check`、compileall、Phase 3/4 offline smoke、`node --check`、wheel build/check（新增模板列入 REQUIRED 并通过隔离安装 smoke）全部通过；提交前 Mimosa normal 深度静态审计完成（findingCount=0）。
-- [ ] Step 28：增加 deterministic product scenarios、live DeepSeek/manual provider smoke、质量 rubric、隐私/安全审查和数据备份恢复演练。
+- [x] Step 28：增加 deterministic product scenarios、live DeepSeek/manual provider smoke、质量 rubric、隐私/安全审查和数据备份恢复演练。
+  - 产品场景：新增 `tests/test_product_journeys.py`，把「Manual product journeys」四条旅程做成无网络、确定性端到端回归（FakeEmbedder + 脚本化 LLM + fixture provider/fetcher/downloader）：单篇精读（生成→证据抽屉→人工编辑→Markdown/DOCX 导出→重启恢复 model/user 双 revision）、三篇比较与综述（矩阵→提纲→章节→GB/T→APA 样式切换→CSV round-trip/JSON schema/DOCX）、发现入库（多 provider DOI dedupe→PDF 下载索引→网页快照索引→同一次 hybrid search 命中 PDF+Web→加入项目）、新鲜度与恢复（重新索引→stale 且旧 revision 可读→重生成；任务重启 interrupted→幂等重排后成功；Agent 待确认跨重启确认成功）。
+  - 质量 rubric 与评估口径：新增 `docs/evaluation.md`——确定性资产清单、人工质量 rubric（精读卡逐栏目证据支持/quote 保真/忠实度/局限性打分、综述逐 claim 映射、五种 CSL 样式人工样例核对）、系统级指标（Recall@5/MRR/引用合法率/人工证据支持率/延迟/token）、live 证据记录要求；重申 scripted 测试不得宣称模型质量或语义蕴含。
+  - Live smoke 基础设施：新增 `scripts/smoke_live_deepseek.py`（真实模型跑 ≥2 张精读卡 + 三篇比较 + 综述 section，输出脱敏 usage/finish_reason/耗时 JSON；无 `PRA_LLM_API_KEY` 时 fail closed，已验证拒绝联网）与 `scripts/smoke_live_providers.py`（arXiv/S2/Crossref 手动实时检索，记录日期/query/结果数/错误码；key 只经环境变量读取）。live 执行本身属于需要用户明确授权的验收（规则 6）：命令与记录模板见 `docs/evaluation.md`，本仓库内不做任何真实调用宣称。
+  - 隐私/安全审查：新增 `scripts/security_review.py`（跟踪文件与 wheel 的可用 key 字面量、`.env` 跟踪、本机绝对路径、敏感打包内容、`|safe` 人工复核清单；内置检测器正/负样例自检通过），当前仓库扫描 0 发现；其余边界映射到既有合同测试（脱敏/snapshot/SSRF/CSRF/API key），映射表见评估文档。
+  - 备份恢复演练：新增 `scripts/backup_restore_drill.py`——临时目录按真实布局构建完整数据（索引/项目/问题/来源/精读卡/笔记/网页快照/任务），文件级备份 + SHA-256 清单校验，空目录恢复后逐项验证（含 snapshot hash 与 hybrid search 可用），全程不触碰真实 `~/.pragent` 与 `~/.pagent`；演练通过（约 0.5s）。
+  - 验证：`tests/test_product_journeys.py` 4 条旅程通过；Python 3.14/macOS 完整回归 412 passed（Windows 基线为 407 passed + 1 skipped，差异是符号链接权限测试在 macOS 可执行），`pip check`、`compileall`、`check_tmp_space.py` 通过；`security_review.py` 与 `backup_restore_drill.py` 实际运行通过。
+  - 提交状态：7 个文件已暂存；本地 commit 被 Mimosa PreToolUse 钩子拦截——扫描器把 `src/pragent/web/legacy/app.js` 三处**浏览器端** `fetch()`（`api`/`apiStream`，调用方全部为硬编码同源相对路径 `/api/ask`、`/api/agent/chat` 等）判为 SSRF 高危。评估为误报：SSRF 指**服务端**请求攻击者可控 URL；服务端防护在 `ingestion/safe_fetch.py` 并由 `tests/test_safe_fetch.py` 等覆盖，且该文件自 Step 27 后未改动（Step 27 记录 Mimosa 审计 findingCount=0）。待用户对钩子裁决（白名单/放行/重构）后落提交；为迎合扫描器修改无关的既有工作代码不在本计划范围内。
 - [ ] Step 29：更新 README/架构/工作流/数据模型/安全/评估文档，构建 wheel，并完成从空目录安装到 `pra serve` 的发布验收。
 
 **Gate：** 三条核心用户旅程全部通过；服务重启不会丢项目/artifact/job/session；所有 live 结果与限制分开记录，不能用 scripted tests 宣称模型质量。

@@ -82,9 +82,11 @@ processor 集成稳定，不证明格式学的正确性。
 
 ### DeepSeek 工作流（需用户授权 + 密钥）
 
-```bash
-export PRA_LLM_API_KEY=...   # 密钥只进环境变量；不写入任何文件
-python scripts/smoke_live_deepseek.py --pdf a.pdf --pdf b.pdf --pdf c.pdf --json live-deepseek.json
+默认模型是 `deepseek-v4-flash`。在仓库根目录的 `.env` 配置
+`PRA_LLM_API_KEY` 后，PowerShell 手动运行：
+
+```powershell
+.venv\Scripts\python scripts\smoke_live_deepseek.py --pdf a.pdf --pdf b.pdf --pdf c.pdf --json live-deepseek.json
 ```
 
 脚本输出脱敏 JSON（模型、usage、finish_reason、耗时、revision、错误码），
@@ -92,6 +94,7 @@ python scripts/smoke_live_deepseek.py --pdf a.pdf --pdf b.pdf --pdf c.pdf --json
 预先写死；provider 未返回 usage/finish_reason 时保存 `null/unknown`。
 之后按第 2 节 rubric 人工检查并把结论（分数 + 问题描述）记录在此文件或
 独立的评估笔记中——**live 结果与 scripted 结果分开记录，不得混写**。
+用户要求人工测试时，自动化会话不得代为重启或继续该命令。
 
 ### Provider 实时可用性
 

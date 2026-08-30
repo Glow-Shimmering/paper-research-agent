@@ -50,7 +50,7 @@ pra serve
 | `PRA_ENV_FILE` | （未设） | 显式指定配置文件；相对路径按当前工作目录解析 |
 | `PRA_LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容 API 地址 |
 | `PRA_LLM_API_KEY` | （空） | 留空则问答退回纯检索 |
-| `PRA_LLM_MODEL` | `deepseek-chat` | 问答模型名 |
+| `PRA_LLM_MODEL` | `deepseek-v4-flash` | 默认 DeepSeek 问答/研究模型；可由环境变量覆盖 |
 | `PRA_WEB_API_KEY` | （空） | Web API key；监听非本机地址时必须设置 |
 | `PRA_SEMANTIC_SCHOLAR_API_KEY` | （空） | 可选 Semantic Scholar Graph API key；留空仍可使用公开接口 |
 | `PRA_CROSSREF_EMAIL` | （空） | Crossref polite pool 联系邮箱 |

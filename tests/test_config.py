@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from pragent.config import _env_or_default, _find_env_file, _positive_int_env
+from pragent.config import DEFAULT_LLM_MODEL, _env_or_default, _find_env_file, _positive_int_env
+
+
+def test_default_llm_model_is_supported_deepseek_v4_flash():
+    assert DEFAULT_LLM_MODEL == "deepseek-v4-flash"
 
 
 def test_empty_environment_value_uses_default(monkeypatch):

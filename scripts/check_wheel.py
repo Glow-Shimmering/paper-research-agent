@@ -61,8 +61,11 @@ def _run_installed_smoke(wheel: Path) -> None:
     child_env = os.environ.copy()
     child_env["PYTHONPATH"] = str(dependency_site)
     child_env["PYTHONNOUSERSITE"] = "1"
+    child_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    child_env["PIP_NO_INDEX"] = "1"
     with tempfile.TemporaryDirectory(prefix="pra-wheel-check-") as raw:
         environment = Path(raw) / "venv"
+        print("wheel smoke: creating isolated venv", flush=True)
         venv.EnvBuilder(with_pip=True).create(environment)
         if os.name == "nt":
             python = environment / "Scripts" / "python.exe"
@@ -70,16 +73,30 @@ def _run_installed_smoke(wheel: Path) -> None:
         else:
             python = environment / "bin" / "python"
             pra = environment / "bin" / "pra"
+        print("wheel smoke: installing wheel", flush=True)
         subprocess.run(
-            [str(python), "-m", "pip", "install", "--no-deps", str(wheel.resolve())],
+            [
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--no-deps",
+                "--no-index",
+                "--disable-pip-version-check",
+                str(wheel.resolve()),
+            ],
             check=True,
+            timeout=120,
+            env=child_env,
         )
+        print("wheel smoke: checking pra --version", flush=True)
         version = subprocess.run(
             [str(pra), "--version"],
             check=True,
             capture_output=True,
             text=True,
             env=child_env,
+            timeout=30,
         ).stdout.strip()
         probe = """
 from pathlib import Path
@@ -116,7 +133,10 @@ with tempfile.TemporaryDirectory() as raw:
         assert '统一来源库' in library.text
     store.close()
 """
-        subprocess.run([str(python), "-c", probe], check=True, env=child_env)
+        print("wheel smoke: probing packaged Web runtime", flush=True)
+        subprocess.run(
+            [str(python), "-c", probe], check=True, env=child_env, timeout=60
+        )
         print(f"isolated wheel smoke passed: {version}")
 
 

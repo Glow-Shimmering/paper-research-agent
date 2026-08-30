@@ -1,0 +1,30 @@
+{
+  "kind": "pragent-live-deepseek-smoke",
+  "model": "deepseek-v4-flash",
+  "base_url_host": "https://api.deepseek.com",
+  "started_at": "2026-08-30T18:58:49",
+  "steps": [
+    {
+      "name": "index",
+      "ok": true,
+      "elapsed_seconds": 3.75,
+      "result": {
+        "added": 2,
+        "updated": 0,
+        "unchanged": 0,
+        "failed": 0,
+        "removed": 0,
+        "skipped_no_text": 0
+      }
+    },
+    {
+      "name": "deep_read:Balanced Co-Clustering of Users and Item",
+      "ok": false,
+      "error_code": "DeepReadSchemaError",
+      "error_message": "LLM JSON repair 后仍不符合 schema（stage=map:limitations; validation=$:value_error:Value error, 证据不足字段不能同时声明 evidence_refs）",
+      "elapsed_seconds": 199.98
+    }
+  ],
+  "finished_at": "2026-08-30T19:02:12",
+  "all_ok": false
+}

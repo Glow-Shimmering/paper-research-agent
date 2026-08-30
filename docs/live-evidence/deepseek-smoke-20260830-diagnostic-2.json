@@ -1,0 +1,119 @@
+{
+  "kind": "pragent-live-deepseek-smoke",
+  "model": "deepseek-v4-flash",
+  "base_url_host": "https://api.deepseek.com",
+  "started_at": "2026-08-30T19:03:33",
+  "steps": [
+    {
+      "name": "index",
+      "ok": true,
+      "elapsed_seconds": 3.49,
+      "result": {
+        "added": 2,
+        "updated": 0,
+        "unchanged": 0,
+        "failed": 0,
+        "removed": 0,
+        "skipped_no_text": 0
+      }
+    },
+    {
+      "name": "deep_read:Balanced Co-Clustering of Users and Item",
+      "ok": true,
+      "elapsed_seconds": 249.64,
+      "result": {
+        "artifact_id": "artifact_4cf5689aa8d24876ae8d40f6c92ab21c",
+        "artifact_title": "Balanced Co-Clustering of Users and Items for Embedding Table Compression in Recommender Systems · 精读卡",
+        "revision_number": 1,
+        "model": "deepseek-v4-flash",
+        "usage": {
+          "completion_tokens": 24730,
+          "context_chars": 43021,
+          "evidence_count": 25,
+          "llm_calls": 10,
+          "prompt_tokens": 13780,
+          "repair_used": false,
+          "response_ids": [
+            "9469a03d-268d-4f82-b18a-42bc1a01c757",
+            "06fe1f6d-3dd7-4cf7-a5e8-a752ae092df3",
+            "dd038649-753c-4664-b3c8-408446bec5b8",
+            "90ac2b10-a361-4698-8a47-229c3909fea3",
+            "7ab0a0f1-dcae-46b0-8216-cafedd317ed9",
+            "950f86ac-7d96-4b0e-893c-08376c7e0140",
+            "033af109-2e2e-4174-9a66-94254da63b88",
+            "3ed0fdf6-7e03-4538-8302-85425a5746de",
+            "3a826585-c1f1-47a0-ab35-d0f101b2aaea",
+            "02795c39-4c8b-41d3-aa6c-dc293f0c4a47"
+          ],
+          "retrieval_calls": 9,
+          "total_tokens": 38510
+        },
+        "finish_reason": "stop",
+        "prompt_version": "deep-read-v2",
+        "schema_version": 1,
+        "created_by": "model"
+      }
+    },
+    {
+      "name": "deep_read:RecoAtlas: From Semantic Plausibility to",
+      "ok": true,
+      "elapsed_seconds": 496.47,
+      "result": {
+        "artifact_id": "artifact_13accd27dd2b4c41b8e460a64cf91b77",
+        "artifact_title": "RecoAtlas: From Semantic Plausibility to Set-Level Utility in LLM Recommendation Agents · 精读卡",
+        "revision_number": 1,
+        "model": "deepseek-v4-flash",
+        "usage": {
+          "completion_tokens": 70300,
+          "context_chars": 50931,
+          "evidence_count": 29,
+          "llm_calls": 11,
+          "prompt_tokens": 15650,
+          "repair_used": true,
+          "response_ids": [
+            "6820a464-7794-4088-a927-80d187e5be95",
+            "a5c743ff-a611-46ec-bf21-3fb66e6c890d",
+            "3efe0143-e71f-4bd9-b12f-b4613494da46",
+            "22154193-22a5-439b-a6ef-7f29547b06e2",
+            "9aca4b19-bab4-4011-8555-27978cf36975",
+            "330d4c8d-0ef9-4183-8391-661d7402c6a6",
+            "385b6346-fb36-4740-a84e-a57d843a8915",
+            "62ba54b9-2236-4f10-b341-6f804c8440eb",
+            "5b743a55-7158-40bf-8c2e-a2deee7d23f6",
+            "81217bc0-d9de-4436-a710-5771faa108b3",
+            "6f6bd328-802f-4481-9350-11be739f0606"
+          ],
+          "retrieval_calls": 9,
+          "total_tokens": 85950
+        },
+        "finish_reason": "stop",
+        "prompt_version": "deep-read-v2",
+        "schema_version": 1,
+        "created_by": "model"
+      }
+    },
+    {
+      "name": "comparison",
+      "ok": true,
+      "elapsed_seconds": 0.02,
+      "result": {
+        "artifact_id": "artifact_be5f45918c8943b08630340aadf3203c",
+        "artifact_title": "跨论文比较矩阵",
+        "revision_number": 1,
+        "model": null,
+        "usage": {
+          "context_chars": 0,
+          "llm_calls": 0,
+          "repair_used": false,
+          "response_ids": []
+        },
+        "finish_reason": null,
+        "prompt_version": "comparison-v1",
+        "schema_version": 1,
+        "created_by": "system"
+      }
+    }
+  ],
+  "finished_at": "2026-08-30T19:16:03",
+  "all_ok": true
+}

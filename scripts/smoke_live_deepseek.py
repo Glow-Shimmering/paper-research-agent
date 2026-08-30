@@ -110,6 +110,16 @@ def _finish(record: dict, output: Path | None) -> int:
     return 0 if record["all_ok"] else 1
 
 
+def _ensure_review_question_id(repository, project_id: str) -> str:
+    """返回首个研究问题；空项目时创建默认问题。"""
+    questions = repository.list_questions(project_id)
+    if questions:
+        return questions[0].id
+    return repository.create_question(
+        project_id, "这些论文的共同点是什么？"
+    ).id
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -213,12 +223,7 @@ def main() -> int:
                 return _finish(record, args.json)
 
             if not args.skip_review:
-                questions = repository.list_questions(project.id)
-                if not questions.total:
-                    repository.create_question(
-                        project.id, "这些论文的共同点是什么？"
-                    )
-                    questions = repository.list_questions(project.id)
+                question_id = _ensure_review_question_id(repository, project.id)
                 comparison_artifact_id = record["steps"][-1]["result"]["artifact_id"]
 
                 record["steps"].append(
@@ -228,7 +233,7 @@ def main() -> int:
                             repository
                         ).generate_and_save(
                             project.id,
-                            [questions.items[0].id],
+                            [question_id],
                             source_ids,
                             comparison_artifact_id,
                             ReviewOutlineWorkflow(repository, llm),

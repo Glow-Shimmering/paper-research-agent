@@ -285,7 +285,12 @@ class ReviewOutlineWorkflow:
         self._consume(
             "context_chars", len(system) + len(user), self.budget.max_context_chars
         )
-        response = self.llm.chat_with_metadata(system, user)
+        json_call = getattr(self.llm, "chat_json_with_metadata", None)
+        response = (
+            json_call(system, user)
+            if callable(json_call)
+            else self.llm.chat_with_metadata(system, user)
+        )
         if not isinstance(response, dict) or not isinstance(
             response.get("content"), str
         ):
@@ -665,7 +670,12 @@ class ReviewSectionWorkflow:
         self._consume(
             "context_chars", len(system) + len(user), self.budget.max_context_chars
         )
-        response = self.llm.chat_with_metadata(system, user)
+        json_call = getattr(self.llm, "chat_json_with_metadata", None)
+        response = (
+            json_call(system, user)
+            if callable(json_call)
+            else self.llm.chat_with_metadata(system, user)
+        )
         if not isinstance(response, dict) or not isinstance(
             response.get("content"), str
         ):

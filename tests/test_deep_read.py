@@ -167,7 +167,9 @@ def test_deep_read_uses_exactly_one_json_repair(tmp_path):
 def test_deep_read_rejects_failed_repair_and_forged_reduce_evidence(tmp_path):
     store, paper_id = _store(tmp_path)
     broken = ScriptedDeepReadLLM(invalid_calls=1, invalid_repair=True)
-    with pytest.raises(DeepReadSchemaError, match="repair"):
+    with pytest.raises(
+        DeepReadSchemaError, match=r"repair.*stage=map:research_question"
+    ):
         DeepReadWorkflow(store, FakeEmbedder(), broken).generate(paper_id)
     assert len(broken.calls) == 2
 
@@ -207,6 +209,22 @@ def test_deep_read_field_dedupes_duplicate_refs_instead_of_failing():
     )
     assert len(field.evidence_refs) == 1
     assert field.evidence_refs[0].quote == "第一次引用原文"
+
+
+def test_deep_read_field_prefers_valid_refs_over_contradictory_insufficient_flag():
+    evidence_id = "ev_" + "c" * 60
+    field = DeepReadField.model_validate(
+        {
+            "text": "该字段有明确证据支持。",
+            "evidence_refs": [
+                {"evidence_id": evidence_id, "quote": "verbatim evidence"}
+            ],
+            "insufficient_evidence": True,
+        }
+    )
+
+    assert field.insufficient_evidence is False
+    assert field.evidence_refs[0].evidence_id == evidence_id
 
 
 def test_quote_recovery_restores_whitespace_drift_to_exact_substring():

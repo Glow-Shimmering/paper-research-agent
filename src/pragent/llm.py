@@ -54,19 +54,37 @@ class LLMClient:
         内容自动重试一次，连续两次为空才判定失败，避免整轮长任务因单次
         采样异常终止。
         """
+        return self._chat_with_metadata(system, user, json_mode=False)
+
+    def chat_json_with_metadata(self, system: str, user: str) -> dict[str, Any]:
+        """请求 OpenAI-compatible JSON Output，并保留审计元数据。
+
+        研究工作流仍执行 Pydantic、evidence scope 与逐字 quote 校验；JSON
+        Output 只约束传输格式，不替代业务 schema，也不增加 repair 次数。
+        """
+        return self._chat_with_metadata(system, user, json_mode=True)
+
+    def _chat_with_metadata(
+        self, system: str, user: str, *, json_mode: bool
+    ) -> dict[str, Any]:
         if not self.is_configured:
             raise LLMError("未配置 PRA_LLM_API_KEY")
         try:
             empty_attempts = 0
             while True:
-                resp = self._get_client().chat.completions.create(
-                    model=self.model,
-                    messages=[
+                request: dict[str, Any] = {
+                    "model": self.model,
+                    "messages": [
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
                     ],
-                    temperature=0.2,
-                    max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+                    "temperature": 0.2,
+                    "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+                }
+                if json_mode:
+                    request["response_format"] = {"type": "json_object"}
+                resp = self._get_client().chat.completions.create(
+                    **request
                 )
                 content = resp.choices[0].message.content
                 if content is not None and str(content).strip():

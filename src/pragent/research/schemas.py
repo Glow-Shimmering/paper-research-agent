@@ -67,12 +67,32 @@ def _dedupe_evidence_ref_values(values: object) -> object:
     return deduped
 
 
+def _prefer_explicit_support(values: object, refs_key: str) -> object:
+    """有引用时确定性消解模型输出的证据状态矛盾。
+
+    仅把 ``insufficient_evidence`` 从 true 纠正为 false；引用随后仍需通过
+    schema、来源范围和逐字 quote 校验，因此不会把无效证据变成有效证据。
+    """
+    if not isinstance(values, dict):
+        return values
+    if values.get("insufficient_evidence") is True and values.get(refs_key):
+        normalized = dict(values)
+        normalized["insufficient_evidence"] = False
+        return normalized
+    return values
+
+
 class DeepReadField(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     text: str = Field(default="", max_length=12000)
     evidence_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
     insufficient_evidence: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_support_state(cls, values: object) -> object:
+        return _prefer_explicit_support(values, "evidence_refs")
 
     @field_validator("evidence_refs", mode="before")
     @classmethod
@@ -135,6 +155,11 @@ class ComparisonCell(BaseModel):
     summary: str = Field(default="", max_length=12000)
     evidence_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
     insufficient_evidence: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_support_state(cls, values: object) -> object:
+        return _prefer_explicit_support(values, "evidence_refs")
 
     @field_validator("evidence_refs", mode="before")
     @classmethod
@@ -206,6 +231,11 @@ class ReviewOutlineClaim(BaseModel):
         default_factory=list, max_length=40
     )
     insufficient_evidence: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_support_state(cls, values: object) -> object:
+        return _prefer_explicit_support(values, "evidence_refs")
 
     @field_validator("evidence_refs", mode="before")
     @classmethod
@@ -309,6 +339,11 @@ class ReviewDraftClaim(BaseModel):
         default_factory=list, max_length=40
     )
     insufficient_evidence: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_support_state(cls, values: object) -> object:
+        return _prefer_explicit_support(values, "citation_tokens")
 
     @field_validator("citation_tokens", mode="before")
     @classmethod

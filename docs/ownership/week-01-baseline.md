@@ -55,7 +55,7 @@ export PRA_DATA_DIR="$PWD/.local/pra-data"
 ```dotenv
 PRA_LLM_BASE_URL=https://api.deepseek.com
 PRA_LLM_API_KEY=
-PRA_LLM_MODEL=deepseek-chat
+PRA_LLM_MODEL=deepseek-v4-flash
 ```
 
 配置后运行：

@@ -109,6 +109,24 @@ def test_chat_with_tools_plain_path_unchanged():
     assert calls[-1].get("stream") is None
 
 
+def test_chat_json_with_metadata_requests_json_object_without_changing_plain_chat():
+    message = SimpleNamespace(content='{"ok":true}', tool_calls=[])
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")],
+        usage=None,
+        id="json-1",
+    )
+    llm, calls = _stream_llm([resp])
+
+    result = llm.chat_json_with_metadata("output JSON", "payload")
+    plain = llm.chat_with_metadata("sys", "user")
+
+    assert result["content"] == '{"ok":true}'
+    assert plain["content"] == '{"ok":true}'
+    assert calls[0]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[1]
+
+
 def test_chat_with_tools_stream_forwards_content_deltas():
     llm, _ = _stream_llm([_chunk(content="开"), _chunk(content="头")])
     seen = []

@@ -98,6 +98,21 @@ class DeepReadDraft:
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
+def _validation_summary(exc: Exception) -> str:
+    """返回可审计但不包含模型正文/quote 的验证摘要。"""
+    if isinstance(exc, ValidationError):
+        items: list[str] = []
+        for error in exc.errors(include_url=False, include_input=False)[:4]:
+            location = ".".join(str(part) for part in error.get("loc", ())) or "$"
+            error_type = str(error.get("type", "validation_error"))
+            message = str(error.get("msg", "验证失败"))[:120]
+            items.append(f"{location}:{error_type}:{message}")
+        return "validation=" + " | ".join(items)
+    if isinstance(exc, json.JSONDecodeError):
+        return f"json_decode=line {exc.lineno}, column {exc.colno}: {exc.msg[:120]}"
+    return f"{exc.__class__.__name__}:{str(exc)[:200]}"
+
+
 class DeepReadWorkflow:
     def __init__(
         self,
@@ -228,7 +243,12 @@ class DeepReadWorkflow:
             _require_quotes_locatable(value, evidence_map)
 
         return self._call_schema(
-            system, user, DeepReadField, verify=verify, user_payload=user
+            system,
+            user,
+            DeepReadField,
+            verify=verify,
+            user_payload=user,
+            stage=f"map:{field_name}",
         )
 
     def _reduce_card(self, mapped: dict[str, DeepReadField]) -> DeepReadCard:
@@ -257,7 +277,9 @@ class DeepReadWorkflow:
                             "reduce 输出改写了 quote；必须逐字保留 map 输入的原文引用"
                         )
 
-        return self._call_schema(system, user, DeepReadCard, verify=verify)
+        return self._call_schema(
+            system, user, DeepReadCard, verify=verify, stage="reduce"
+        )
 
     def _call_schema(
         self,
@@ -267,6 +289,7 @@ class DeepReadWorkflow:
         *,
         verify: Optional[Callable[[BaseModel], None]] = None,
         user_payload: Optional[str] = None,
+        stage: str,
     ) -> SchemaT:
         response = self._call_llm(system, user)
         try:
@@ -276,7 +299,10 @@ class DeepReadWorkflow:
             return parsed
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             if self.usage.repair_used:
-                raise DeepReadSchemaError("LLM JSON schema 验证失败，repair 已用尽") from exc
+                raise DeepReadSchemaError(
+                    "LLM JSON schema 验证失败，repair 已用尽"
+                    f"（stage={stage}; {_validation_summary(exc)}）"
+                ) from exc
             self.usage.repair_used = True
             repair_system = (
                 "修复下列 JSON，使其严格符合 JSON Schema。只输出 JSON，不解释；"
@@ -303,7 +329,10 @@ class DeepReadWorkflow:
                     verify(parsed)
                 return parsed
             except (ValidationError, ValueError, json.JSONDecodeError) as repair_exc:
-                raise DeepReadSchemaError("LLM JSON repair 后仍不符合 schema") from repair_exc
+                raise DeepReadSchemaError(
+                    "LLM JSON repair 后仍不符合 schema"
+                    f"（stage={stage}; {_validation_summary(repair_exc)}）"
+                ) from repair_exc
 
     def _call_llm(self, system: str, user: str) -> dict[str, Any]:
         self._consume("llm_calls", 1, self.budget.max_llm_calls)
@@ -311,7 +340,12 @@ class DeepReadWorkflow:
         self._consume("context_chars", context_chars, self.budget.max_context_chars)
         if not hasattr(self.llm, "chat_with_metadata"):
             raise DeepReadError("LLM 不支持可审计 metadata 调用")
-        response = self.llm.chat_with_metadata(system, user)
+        json_call = getattr(self.llm, "chat_json_with_metadata", None)
+        response = (
+            json_call(system, user)
+            if callable(json_call)
+            else self.llm.chat_with_metadata(system, user)
+        )
         if not isinstance(response, dict) or not isinstance(response.get("content"), str):
             raise DeepReadError("LLM 返回格式无效")
         metadata = response.get("metadata") or {}

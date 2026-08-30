@@ -1,0 +1,67 @@
+{
+  "kind": "pragent-live-deepseek-smoke",
+  "model": "deepseek-v4-flash",
+  "base_url_host": "https://api.deepseek.com",
+  "started_at": "2026-08-30T18:51:16",
+  "steps": [
+    {
+      "name": "index",
+      "ok": true,
+      "elapsed_seconds": 6.28,
+      "result": {
+        "added": 3,
+        "updated": 0,
+        "unchanged": 0,
+        "failed": 0,
+        "removed": 0,
+        "skipped_no_text": 0
+      }
+    },
+    {
+      "name": "deep_read:CRAB: Codebook Rebalancing for Bias Miti",
+      "ok": true,
+      "elapsed_seconds": 119.89,
+      "result": {
+        "artifact_id": "artifact_6f4759e890ad4ba38c7a09fbd9750c87",
+        "artifact_title": "CRAB: Codebook Rebalancing for Bias Mitigation in Generative Recommendation · 精读卡",
+        "revision_number": 1,
+        "model": "deepseek-v4-flash",
+        "usage": {
+          "completion_tokens": 16241,
+          "context_chars": 45447,
+          "evidence_count": 22,
+          "llm_calls": 10,
+          "prompt_tokens": 15058,
+          "repair_used": false,
+          "response_ids": [
+            "8af0c7e8-45d3-48ee-a2cf-d478278da0ad",
+            "b040ca48-936d-4311-9d44-4e09d03933fd",
+            "f55a1cca-66dd-484e-a0c8-ac541b060780",
+            "1f9ad543-e2bb-425d-a745-0b6e9ff124ca",
+            "56367f9a-0f27-4b25-9c82-702131624e6b",
+            "db7249b7-cc52-43ba-8e4f-dc147d6aaf28",
+            "d146515c-2371-4778-98ce-ed0be0dc95a7",
+            "89319b08-8ae2-48f9-a05e-d037e6c83cc6",
+            "71d427a9-6ec4-4a0f-8857-411b8de8713f",
+            "978da06c-bf5b-471f-85d2-e8d75cc8514a"
+          ],
+          "retrieval_calls": 9,
+          "total_tokens": 31299
+        },
+        "finish_reason": "stop",
+        "prompt_version": "deep-read-v2",
+        "schema_version": 1,
+        "created_by": "model"
+      }
+    },
+    {
+      "name": "deep_read:Balanced Co-Clustering of Users and Item",
+      "ok": false,
+      "error_code": "DeepReadSchemaError",
+      "error_message": "LLM JSON schema 验证失败，repair 已用尽",
+      "elapsed_seconds": 251.69
+    }
+  ],
+  "finished_at": "2026-08-30T18:57:34",
+  "all_ok": false
+}

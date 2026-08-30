@@ -27,7 +27,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from pragent.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from pragent.config import EMBED_MODEL, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 from pragent.embeddings import Embedder
 from pragent.indexer import index_library
 from pragent.llm import LLMClient
@@ -72,6 +72,9 @@ def _step(name: str, run) -> dict:
 
 def _redacted(result) -> dict:
     """只保留 id/revision/usage/finish_reason 等元数据；不带正文、quote 或密钥。"""
+    if isinstance(result, dict):
+        # index 等基础步骤返回纯计数字典（added/updated/failed 等），无正文。
+        return dict(result)
     revision = result.revision
     record = {
         "artifact_id": result.artifact.id,
@@ -143,7 +146,7 @@ def main() -> int:
         "steps": [],
     }
     llm = LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
-    embedder = Embedder()
+    embedder = Embedder(EMBED_MODEL)
 
     with tempfile.TemporaryDirectory(prefix="pra-live-smoke-") as raw:
         root = Path(raw)

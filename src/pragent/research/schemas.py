@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DEEP_READ_SCHEMA_VERSION = 1
 COMPARISON_SCHEMA_VERSION = 1
@@ -41,12 +41,43 @@ class EvidenceRef(BaseModel):
     quote: str = Field(min_length=1, max_length=4000)
 
 
+def _dedupe_evidence_ref_values(values: object) -> object:
+    """按引用身份确定性去重，保留首次出现。
+
+    真实模型常在同一字段/cell/claim 内对同一证据多次引用（对不同论断
+    复用同一支持证据）。引用身份相同即同一支持证据，保留第一次即可，
+    不应因此消耗宝贵的 repair 预算；去重不新增、不改写任何内容。
+    """
+    if not isinstance(values, list):
+        return values
+    seen: set[tuple] = set()
+    deduped: list = []
+    for item in values:
+        if isinstance(item, dict):
+            key = (item.get("source_id"), item.get("evidence_id"))
+        else:
+            key = (
+                getattr(item, "source_id", None),
+                getattr(item, "evidence_id", None),
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 class DeepReadField(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     text: str = Field(default="", max_length=12000)
     evidence_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
     insufficient_evidence: bool = False
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _dedupe_refs(cls, values: object) -> object:
+        return _dedupe_evidence_ref_values(values)
 
     @model_validator(mode="after")
     def validate_support_state(self) -> "DeepReadField":
@@ -58,9 +89,6 @@ class DeepReadField(BaseModel):
             raise ValueError("非空精读字段必须包含 evidence_refs")
         if not self.text:
             raise ValueError("空字段必须明确 insufficient_evidence=true")
-        identities = [item.evidence_id for item in self.evidence_refs]
-        if len(identities) != len(set(identities)):
-            raise ValueError("同一字段不能重复引用 evidence")
         return self
 
 
@@ -108,6 +136,11 @@ class ComparisonCell(BaseModel):
     evidence_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
     insufficient_evidence: bool = False
 
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _dedupe_refs(cls, values: object) -> object:
+        return _dedupe_evidence_ref_values(values)
+
     @model_validator(mode="after")
     def validate_support_state(self) -> "ComparisonCell":
         if self.insufficient_evidence:
@@ -118,9 +151,6 @@ class ComparisonCell(BaseModel):
             raise ValueError("有证据的 comparison cell 必须包含 summary")
         if not self.evidence_refs:
             raise ValueError("有证据的 comparison cell 必须包含 evidence_refs")
-        identities = [item.evidence_id for item in self.evidence_refs]
-        if len(identities) != len(set(identities)):
-            raise ValueError("同一 comparison cell 不能重复引用 evidence")
         return self
 
 
@@ -177,6 +207,11 @@ class ReviewOutlineClaim(BaseModel):
     )
     insufficient_evidence: bool = False
 
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _dedupe_refs(cls, values: object) -> object:
+        return _dedupe_evidence_ref_values(values)
+
     @model_validator(mode="after")
     def validate_support_state(self) -> "ReviewOutlineClaim":
         if len(self.source_ids) != len(set(self.source_ids)):
@@ -190,11 +225,6 @@ class ReviewOutlineClaim(BaseModel):
         evidence_sources = [item.source_id for item in self.evidence_refs]
         if set(evidence_sources) != set(self.source_ids):
             raise ValueError("claim 的每个来源都必须有 evidence 支持")
-        identities = [
-            (item.source_id, item.evidence_id) for item in self.evidence_refs
-        ]
-        if len(identities) != len(set(identities)):
-            raise ValueError("同一 claim 不能重复引用来源 evidence")
         return self
 
 
@@ -280,6 +310,11 @@ class ReviewDraftClaim(BaseModel):
     )
     insufficient_evidence: bool = False
 
+    @field_validator("citation_tokens", mode="before")
+    @classmethod
+    def _dedupe_citation_tokens(cls, values: object) -> object:
+        return _dedupe_evidence_ref_values(values)
+
     @model_validator(mode="after")
     def validate_citations(self) -> "ReviewDraftClaim":
         if self.insufficient_evidence:
@@ -288,11 +323,6 @@ class ReviewDraftClaim(BaseModel):
             return self
         if not self.citation_tokens:
             raise ValueError("section claim 必须包含 citation tokens 或明确证据不足")
-        identities = [
-            (item.source_id, item.evidence_id) for item in self.citation_tokens
-        ]
-        if len(identities) != len(set(identities)):
-            raise ValueError("同一 section claim 不能重复引用 citation token")
         return self
 
 

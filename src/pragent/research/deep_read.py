@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Mapping, Optional, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -20,7 +21,7 @@ from .schemas import (
     DeepReadField,
 )
 
-DEEP_READ_PROMPT_VERSION = "deep-read-v1"
+DEEP_READ_PROMPT_VERSION = "deep-read-v2"
 
 _FIELD_QUERIES = {
     "research_question": "research question objective problem addressed 研究问题 研究目标",
@@ -133,6 +134,7 @@ class DeepReadWorkflow:
             if self.on_progress is not None:
                 self.on_progress(index, len(DEEP_READ_FIELD_ORDER))
         card = self._reduce_card(mapped)
+        card = self._recover_quotes(card, evidence)
         self._ensure_refs_were_retrieved(card, evidence)
         return DeepReadDraft(
             card=card,
@@ -153,7 +155,7 @@ class DeepReadWorkflow:
             raise ValueError("未知精读字段")
         evidence: dict[str, Evidence] = {}
         candidates = self._retrieve_field(paper_id, field_name, evidence)
-        result = self._map_field(field_name, candidates)
+        result = _recover_field_quotes(self._map_field(field_name, candidates), evidence)
         self._ensure_field_refs(result, evidence)
         return DeepReadFieldDraft(
             field=result,
@@ -208,7 +210,10 @@ class DeepReadWorkflow:
         ]
         system = (
             "你是证据优先的论文精读助手。只使用给定证据，输出单个 JSON 对象，"
-            "字段必须为 text、evidence_refs、insufficient_evidence。总结使用中文；"
+            "字段必须为 text、evidence_refs、insufficient_evidence。"
+            "evidence_refs 必须是对象数组，每个元素形如 "
+            '{"evidence_id": "ev_...", "quote": "逐字原文片段"}；'
+            "不要输出字符串数组，也不要添加其他键。总结使用中文；"
             "quote 必须逐字复制 evidence text 中的原文，不得编造。证据不足时设置 "
             "insufficient_evidence=true、evidence_refs=[]。"
         )
@@ -217,24 +222,58 @@ class DeepReadWorkflow:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return self._call_schema(system, user, DeepReadField)
+        evidence_map = {item.id: item for item in candidates}
+
+        def verify(value: DeepReadField) -> None:
+            _require_quotes_locatable(value, evidence_map)
+
+        return self._call_schema(
+            system, user, DeepReadField, verify=verify, user_payload=user
+        )
 
     def _reduce_card(self, mapped: dict[str, DeepReadField]) -> DeepReadCard:
         system = (
             "你是论文精读卡整理器。只输出符合给定九字段结构的 JSON；不得新增"
-            " evidence ID、不得改写 quote。保留证据不足标记，中文总结、英文原文不翻译。"
+            " evidence ID、不得改写 quote。每个字段的 evidence_refs 保持输入中的"
+            "对象数组形状（元素含 evidence_id 与 quote），不要改成字符串。"
+            "保留证据不足标记，中文总结、英文原文不翻译。"
         )
         user = json.dumps(
             {name: value.model_dump(mode="json") for name, value in mapped.items()},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return self._call_schema(system, user, DeepReadCard)
+        input_quotes: dict[str, set[str]] = {}
+        for value in mapped.values():
+            for ref in value.evidence_refs:
+                input_quotes.setdefault(ref.evidence_id, set()).add(ref.quote)
 
-    def _call_schema(self, system: str, user: str, schema: type[SchemaT]) -> SchemaT:
+        def verify(card: DeepReadCard) -> None:
+            for _name, field_value in card.ordered_fields():
+                for ref in field_value.evidence_refs:
+                    known = input_quotes.get(ref.evidence_id)
+                    if known is not None and ref.quote not in known:
+                        raise ValueError(
+                            "reduce 输出改写了 quote；必须逐字保留 map 输入的原文引用"
+                        )
+
+        return self._call_schema(system, user, DeepReadCard, verify=verify)
+
+    def _call_schema(
+        self,
+        system: str,
+        user: str,
+        schema: type[SchemaT],
+        *,
+        verify: Optional[Callable[[BaseModel], None]] = None,
+        user_payload: Optional[str] = None,
+    ) -> SchemaT:
         response = self._call_llm(system, user)
         try:
-            return _parse_schema(response["content"], schema)
+            parsed = _parse_schema(response["content"], schema)
+            if verify is not None:
+                verify(parsed)
+            return parsed
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             if self.usage.repair_used:
                 raise DeepReadSchemaError("LLM JSON schema 验证失败，repair 已用尽") from exc
@@ -243,18 +282,26 @@ class DeepReadWorkflow:
                 "修复下列 JSON，使其严格符合 JSON Schema。只输出 JSON，不解释；"
                 "不得添加输入中不存在的 evidence ID 或 quote。"
             )
+            repair_payload: dict[str, Any] = {
+                "schema": schema.model_json_schema(),
+                "invalid_output": str(response["content"])[:12000],
+                "validation_error": str(exc)[:2000],
+            }
+            if user_payload is not None:
+                # 带上原始证据载荷：quote 定位失败时模型必须从同一证据原文
+                # 重新逐字复制，而不是凭记忆改写。
+                repair_payload["original_user_payload"] = user_payload[:60_000]
             repair_user = json.dumps(
-                {
-                    "schema": schema.model_json_schema(),
-                    "invalid_output": str(response["content"])[:12000],
-                    "validation_error": str(exc)[:2000],
-                },
+                repair_payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
             repaired = self._call_llm(repair_system, repair_user)
             try:
-                return _parse_schema(repaired["content"], schema)
+                parsed = _parse_schema(repaired["content"], schema)
+                if verify is not None:
+                    verify(parsed)
+                return parsed
             except (ValidationError, ValueError, json.JSONDecodeError) as repair_exc:
                 raise DeepReadSchemaError("LLM JSON repair 后仍不符合 schema") from repair_exc
 
@@ -316,6 +363,19 @@ class DeepReadWorkflow:
         }
 
     @staticmethod
+    def _recover_quotes(
+        card: DeepReadCard, evidence: dict[str, Evidence]
+    ) -> DeepReadCard:
+        updates: dict[str, DeepReadField] = {}
+        for name, value in card.ordered_fields():
+            recovered = _recover_field_quotes(value, evidence)
+            if recovered is not value:
+                updates[name] = recovered
+        if not updates:
+            return card
+        return card.model_copy(update=updates)
+
+    @staticmethod
     def _ensure_refs_were_retrieved(
         card: DeepReadCard, evidence: dict[str, Evidence]
     ) -> None:
@@ -338,6 +398,84 @@ def _parse_schema(content: str, schema: type[SchemaT]) -> SchemaT:
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text)
     return schema.model_validate(json.loads(text))
+
+
+def _locate_exact_quote(text: str, quote: str) -> Optional[str]:
+    """把模型转录的 quote 恢复为证据原文的精确子串；无法定位返回 None。
+
+    模型逐字复制原文时常见三类机械漂移：空白层面（换行/多空格/全角空格）、
+    PDF 断词连字符位置（原文 "perfor-\\nmance" 被转写成 "performance"）与
+    兼容字形（连字/全角/数学兼容符号）。这里在忽略空白与连字符、并对两侧
+    做 NFKC 归一化的意义上定位引用片段，再映射回原文字符区间，返回真正
+    的原文子串；若模型改动了其他字符则定位失败，交由保存事务的精确子串
+    校验 fail closed，绝不静默改写内容。
+    """
+    if quote in text:
+        return quote
+    ignorable = frozenset(" \t\r\n\f\v\u00a0\u3000-")
+
+    def _collapsed_with_map(raw: str) -> tuple[str, list[int]]:
+        chars: list[str] = []
+        index_map: list[int] = []
+        for i, ch in enumerate(raw):
+            if ch in ignorable:
+                continue
+            normalized = unicodedata.normalize("NFKC", ch)
+            for _ in normalized:
+                index_map.append(i)
+            chars.append(normalized)
+        return "".join(chars), index_map
+
+    collapsed, index_map = _collapsed_with_map(text)
+    needle, _ = _collapsed_with_map(quote)
+    if not needle:
+        return None
+    start = collapsed.find(needle)
+    if start < 0:
+        return None
+    end = start + len(needle) - 1
+    return text[index_map[start] : index_map[end] + 1]
+
+
+def _recover_field_quotes(
+    value: DeepReadField, evidence: dict[str, Evidence]
+) -> DeepReadField:
+    recovered_refs = []
+    changed = False
+    for ref in value.evidence_refs:
+        source = evidence.get(ref.evidence_id)
+        exact = (
+            _locate_exact_quote(str(source.text), ref.quote)
+            if source is not None
+            else None
+        )
+        if exact is not None and exact != ref.quote:
+            changed = True
+            ref = ref.model_copy(update={"quote": exact})
+        recovered_refs.append(ref)
+    if not changed:
+        return value
+    return value.model_copy(update={"evidence_refs": recovered_refs})
+
+
+def _require_quotes_locatable(
+    value: DeepReadField, evidence: Mapping[str, Evidence]
+) -> None:
+    """校验字段引用的 quote 可在证据原文中定位（恢复后）。
+
+    无法定位说明模型改写了原文内容；作为 schema 层错误抛出以触发一次
+    有界 repair（repair 载荷携带原始证据文本，模型可重新逐字复制）。
+    """
+    for ref in value.evidence_refs:
+        source = evidence.get(ref.evidence_id)
+        if source is None:
+            raise ValueError(f"quote 引用了未检索到的证据：{ref.evidence_id}")
+        if _locate_exact_quote(str(source.text), ref.quote) is None:
+            raise ValueError(
+                "evidence_refs 中的 quote 无法在证据原文中定位；"
+                "必须从 original_user_payload 的 evidence text 逐字复制，"
+                "或在证据不足时设置 insufficient_evidence=true 且清空 refs"
+            )
 
 
 def _metadata_total_tokens(metadata: dict[str, Any]) -> int:

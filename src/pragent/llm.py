@@ -10,6 +10,12 @@ class LLMError(Exception):
     pass
 
 
+# DeepSeek 等 OpenAI 兼容端点在未指定 max_tokens 时使用较小的默认输出上限；
+# 思考型模型的推理过程也计入输出预算，预算耗尽会返回空 content。显式给足
+# 输出空间，保证精读卡等长 JSON 产物不被截断。
+DEFAULT_MAX_OUTPUT_TOKENS = 16384
+
+
 class LLMClient:
     # 声明流式能力；chat_turn 等编排方据此决定是否透传 on_delta（脚本化
     # 测试替身没有该标记，自动保持旧的非流式调用签名）。
@@ -43,24 +49,40 @@ class LLMClient:
 
         ``chat`` 保持原有字符串返回值；需要 usage / finish_reason /
         response_id 的调用方使用本方法或读取 ``last_response_metadata``。
+
+        思考型模型偶发把输出预算耗在推理上并返回空 content；此路径对空
+        内容自动重试一次，连续两次为空才判定失败，避免整轮长任务因单次
+        采样异常终止。
         """
         if not self.is_configured:
             raise LLMError("未配置 PRA_LLM_API_KEY")
         try:
-            resp = self._get_client().chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0.2,
-            )
-            content = resp.choices[0].message.content
-            if content is None:
-                raise LLMError("LLM 返回空内容")
-            metadata = _response_metadata(resp)
-            self.last_response_metadata = metadata
-            return {"content": content, "metadata": metadata}
+            empty_attempts = 0
+            while True:
+                resp = self._get_client().chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=0.2,
+                    max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+                )
+                content = resp.choices[0].message.content
+                if content is not None and str(content).strip():
+                    metadata = _response_metadata(resp)
+                    self.last_response_metadata = metadata
+                    return {"content": content, "metadata": metadata}
+                empty_attempts += 1
+                if empty_attempts >= 2:
+                    # 空字符串同样是失败（常见于思考型模型输出预算被推理
+                    # 耗尽，finish_reason=length）；带上 finish_reason 便于
+                    # 区分采样异常与预算截断。
+                    finish_reason = _response_metadata(resp).get("finish_reason")
+                    raise LLMError(
+                        f"LLM 返回空内容（finish_reason={finish_reason}，"
+                        "重试一次后仍为空）"
+                    )
         except LLMError:
             raise
         except Exception as exc:

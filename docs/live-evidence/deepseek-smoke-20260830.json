@@ -1,0 +1,67 @@
+{
+  "kind": "pragent-live-deepseek-smoke",
+  "model": "deepseek-v4-flash",
+  "base_url_host": "https://api.deepseek.com",
+  "started_at": "2026-08-30T15:20:00",
+  "steps": [
+    {
+      "name": "index",
+      "ok": true,
+      "elapsed_seconds": 4.3,
+      "result": {
+        "added": 3,
+        "updated": 0,
+        "unchanged": 0,
+        "failed": 0,
+        "removed": 0,
+        "skipped_no_text": 0
+      }
+    },
+    {
+      "name": "deep_read:CRAB: Codebook Rebalancing for Bias Miti",
+      "ok": true,
+      "elapsed_seconds": 161.39,
+      "result": {
+        "artifact_id": "artifact_21eb89e9cbe749cfaa3c0595c2359dda",
+        "artifact_title": "CRAB: Codebook Rebalancing for Bias Mitigation in Generative Recommendation · 精读卡",
+        "revision_number": 1,
+        "model": "deepseek-v4-flash",
+        "usage": {
+          "completion_tokens": 22020,
+          "context_chars": 42366,
+          "evidence_count": 22,
+          "llm_calls": 10,
+          "prompt_tokens": 14138,
+          "repair_used": false,
+          "response_ids": [
+            "641b395e-2fce-45fa-91fe-21c93c2db44a",
+            "f0d70fb7-14d8-4484-8e00-91c7677c9be8",
+            "e930cdcb-07d6-4a8c-b272-38abcbb00998",
+            "70b4241c-ae95-46b4-8fd2-b29305d0c496",
+            "b93cd182-117d-4b06-8248-9a8959c7712c",
+            "e263d06d-484d-4bab-8bbc-5898e31af1c1",
+            "55a3b1d1-2a84-41fa-91fd-e824b1774960",
+            "7a29d227-6e79-4330-987c-07f99940b3fd",
+            "6e1a68bc-7680-4ef2-9d13-435d6bdb8204",
+            "ba80ca91-932e-4169-b0d1-9eb2be2761e6"
+          ],
+          "retrieval_calls": 9,
+          "total_tokens": 36158
+        },
+        "finish_reason": "stop",
+        "prompt_version": "deep-read-v2",
+        "schema_version": 1,
+        "created_by": "model"
+      }
+    },
+    {
+      "name": "deep_read:Balanced Co-Clustering of Users and Item",
+      "ok": false,
+      "error_code": "DeepReadSchemaError",
+      "error_message": "LLM JSON repair 后仍不符合 schema",
+      "elapsed_seconds": 110.19
+    }
+  ],
+  "finished_at": "2026-08-30T15:24:36",
+  "all_ok": false
+}

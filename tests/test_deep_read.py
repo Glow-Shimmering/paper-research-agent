@@ -190,3 +190,61 @@ def test_deep_read_enforces_retrieval_and_context_budgets(tmp_path):
         workflow.generate(paper_id)
     assert len(llm.calls) == 1
     store.close()
+
+
+def test_deep_read_field_dedupes_duplicate_refs_instead_of_failing():
+    """真实模型会对同一证据多次引用；schema 在解析前确定性去重。"""
+    duplicated_id = "ev_" + "a" * 60
+    field = DeepReadField.model_validate(
+        {
+            "text": "同一证据支持字段内的两个论断。",
+            "evidence_refs": [
+                {"evidence_id": duplicated_id, "quote": "第一次引用原文"},
+                {"evidence_id": duplicated_id, "quote": "第二次引用原文"},
+            ],
+            "insufficient_evidence": False,
+        }
+    )
+    assert len(field.evidence_refs) == 1
+    assert field.evidence_refs[0].quote == "第一次引用原文"
+
+
+def test_quote_recovery_restores_whitespace_drift_to_exact_substring():
+    """模型转录的空白漂移恢复为真原文子串；非空白改动保持 fail closed。"""
+    from pragent.research.deep_read import _locate_exact_quote
+
+    text = (
+        "We present the first investigation demonstrating\n"
+        "   that imbalanced codebooks give rise to over-popular tokens."
+    )
+    located = _locate_exact_quote(text, "demonstrating that imbalanced")
+    assert located == "demonstrating\n   that imbalanced"
+    assert located in text
+    # PDF 断词连字符：原文 "perfor-\nmance"，模型转写为 "performance"。
+    hyphenated = "Overall, CRAB achieves perfor-\nmance comparable to MOR."
+    assert _locate_exact_quote(hyphenated, "achieves performance comparable") == (
+        "achieves perfor-\nmance comparable"
+    )
+    assert _locate_exact_quote(text, "demonstrating that imbalanceX") is None
+
+
+def test_recover_field_quotes_updates_drifted_quotes():
+    from types import SimpleNamespace
+
+    from pragent.research.deep_read import _recover_field_quotes
+
+    text = "alpha beta\ngamma delta"
+    evidence_id = "ev_" + "b" * 60
+    evidence = {evidence_id: SimpleNamespace(text=text)}
+    value = DeepReadField.model_validate(
+        {
+            "text": "引用。",
+            "evidence_refs": [
+                {"evidence_id": evidence_id, "quote": "alpha beta gamma delta"}
+            ],
+        }
+    )
+    recovered = _recover_field_quotes(value, evidence)
+    assert recovered is not value
+    assert recovered.evidence_refs[0].quote == "alpha beta\ngamma delta"
+    assert recovered.evidence_refs[0].quote in text

@@ -1,6 +1,12 @@
 # PRAgent 产品工作流
 
-本文记录当前已实现的 Phase 2–5 研究工作流和 Phase 6 的引用规范化；多格式导出仍属于后续 Step，不在这里提前宣称可用。
+本文记录当前已实现的研究工作流：Phase 2–5 的项目/发现/精读/比较/综述、Phase 6 的引用规范化与多格式导出，以及研究工作台的产品化页面（Dashboard、任务中心、证据与笔记、帮助）。所有描述均以已合入代码与测试为准。
+
+## 0. Dashboard、任务中心与帮助
+
+- `/ui/`（Dashboard）：项目、最近来源、进行中任务与库统计的统一入口；每个区块都有中文空状态引导（例如来源库为空时提示去 Discover 或 `pra index`）。
+- `/ui/jobs`（任务中心）：全局任务列表，按状态筛选，HTMX 每 3 秒轮询刷新进度与失败信息；queued/running/interrupted 任务可请求取消（版本 CAS，冲突显式 409）。取消只保证在阶段边界停止，不会中断进行中的模型请求。
+- `/ui/help`：三条核心工作流、任务与恢复说明，以及隐私与安全边界（云端模型仅接收问题与选中文本；引用/新鲜度校验不等于语义蕴含）。
 
 ## 1. 创建研究项目
 
@@ -77,11 +83,19 @@ Semantic Scholar key 是可选请求头；不会进入 URL、response cache、SQ
 
 `review_section` workflow 只接受当前 ready、未 stale 的 review outline 及其中一个 section。章节正文是有序 claim 列表；每条 claim 使用结构化 `source_id + evidence_id + exact quote` citation tokens，或者显式 `insufficient_evidence`。模型返回后再次检查 outline revision/freshness，随后保存事务把 token 限制在该 section planned claims 的证据集合，并再次验证来源、chunk/hash 与 quote。
 
-章节人工编辑以 artifact version CAS 追加 `created_by=user` revision；默认保留原 citation tokens，也可以显式切换为证据不足并同时清空 refs/links。章节生成已注册为持久 `review_section` worker job；交互页面已完成，确定性正文/引用导出由后续阶段完成。
+章节人工编辑以 artifact version CAS 追加 `created_by=user` revision；默认保留原 citation tokens，也可以显式切换为证据不足并同时清空 refs/links。章节生成已注册为持久 `review_section` worker job；交互页面与确定性正文/引用导出均已完成。
 
 Review Web/API 从 ready、未 stale 的 comparison 自动取得来源集合，用户不能在提纲或章节请求中静默加入项目外论文。页面支持多研究问题选择、提纲章节标题/目标调整、逐节生成与显式重试、claim evidence drawer、提纲 revision 历史和当前章节的整稿预览。提纲或绑定问题/比较/来源漂移后页面只保留历史读取，禁止继续派生章节。
 
-## 7. 引用元数据与样式
+## 8. 项目证据与研究笔记
+
+`/ui/projects/{project_id}/evidence` 集中呈现项目内产物引用的证据与研究笔记：
+
+- 证据列表聚合每个 artifact 当前 revision 的 evidence links（跨精读/比较/提纲/章节），展示 evidence ID、字段路径、页码与来源定位；网页来源显示 canonical URI，PDF 只显示文件名，不返回主机绝对路径；来源更新后对应条目显示 stale 徽标；
+- 研究笔记支持项目级与来源级两种 scope：创建后可继续编辑（标题/Markdown 内容），每次保存都是版本 CAS（`expected_version`），冲突返回 409，不覆盖历史；JSON API 位于 `/api/v1/projects/{id}/notes`；
+- 笔记内容按纯文本转义渲染，不执行 Markdown 内嵌 HTML，与其他页面共享同一 CSRF 与脱敏边界。
+
+## 9. 引用元数据与样式
 
 当前 `ResearchSource` 的 canonical metadata 会在导出边界确定性转换为 CSL-JSON，不修改数据库原始记录，也不凭空补齐缺失字段。转换包含题名、作者、年份、DOI、URL、访问日期以及期刊、卷期、页码、出版社和语言；英文空格姓名按 given/family 拆分，无法可靠拆分的姓名保留为 CSL `literal`。
 
@@ -99,7 +113,7 @@ Web 的“预览与导出”页同步生成受 200,000 字符上限约束的 Mar
 
 HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-encoded parser 保留为列表，既不丢失多研究问题选择，也继续受 1 MB/100 字段上限约束。
 
-## 8. JSON API
+## 10. JSON API
 
 新能力位于 `/api/v1`：
 
@@ -115,7 +129,7 @@ HTMX 写入仍使用 double-submit CSRF。重复 checkbox 字段由受限 URL-en
 
 默认仅允许 loopback；远程模式继续要求 API key + TLS。所有 HTMX 写表单要求同源和 double-submit CSRF token，JSON 写请求受 API key/origin/body limit 中间件保护。
 
-## 9. Project-scoped Web Agent
+## 11. Project-scoped Web Agent
 
 Agent 会话可在第一次提问时绑定一个研究项目，随后不能切换到其他 project；每个 run 同时带有 project/session scope。`list_project_sources`、`list_project_artifacts` 和 `list_project_evidence` 只读取该绑定项目，且不返回 snapshot path、抽取全文或服务器绝对路径。它们属于本地只读工具，不触发确认；`web_search`、下载、索引、固定证据和保存笔记等联网/写入工具继续按 effects 强制确认。
 

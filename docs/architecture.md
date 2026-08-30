@@ -113,6 +113,8 @@ SSE 回合与排他锁绑定：每回合持有会话锁，SSE 流提前断开只
 
 `/ui/projects` 使用服务端 Jinja autoescape 与 wheel 内置 HTMX 2.0.8（MIT license 随资源打包），不依赖 Node/CDN。写表单必须同时通过同源检查、1MB body limit 和 HttpOnly/SameSite double-submit CSRF cookie；远程模式先通过 `X-PRA-Key` 换取不含原始 key 的 HttpOnly UI cookie。项目来源响应只返回题录、状态和安全 filename，不返回 `papers.path`、snapshot path 或抽取正文。project、question 与 source membership 均来自 SQLite repository，页面刷新或服务重启不依赖进程内状态。
 
+研究工作台的产品化页面共享同一 repository 与安全边界：`/ui/` 聚合项目/最近来源/进行中任务与库统计；`/ui/jobs` 提供全局任务列表、状态筛选、3 秒 HTMX 轮询 fragment 与版本 CAS 的取消请求；`/ui/projects/{id}/evidence` 集中展示当前 artifact revision 引用的证据（locator 只含 filename 或 canonical URI）与版本化研究笔记；`/ui/help` 记录工作流与隐私边界。所有页面带中文空状态与错误出口，写表单一律走 CSRF token。
+
 完整网页威胁模型、DNS pinning、snapshot 与 raw HTML 边界见 [来源抓取安全](source-security.md)。
 
 ### CSL 引用边界
@@ -137,6 +139,7 @@ Web 正式导出是 idempotent SQLite job：请求把 artifact/source/review-sec
 
 - 单元与集成测试覆盖工具合同、索引与证据一致性、确认/取消、CAS 冲突和 TUI 续跑。
 - 37 个离线 JSON 场景用于回归状态机、预算和引用合同。
-- 场景使用脚本化模型与工具结果，不代表真实模型质量、提示注入抵抗能力或语义蕴含评测。
+- `tests/test_product_journeys.py` 以离线 fixture 覆盖四条核心产品旅程（精读导出、比较/综述样式切换、发现入库混合检索、新鲜度与恢复）。
+- 场景使用脚本化模型与工具结果，不代表真实模型质量、提示注入抵抗能力或语义蕴含评测；质量声明的分层口径见 [评估文档](evaluation.md)。
 
 Phase 3 的 provider 与网页测试全部使用 fixture/fake transport，不代表实时服务可用性。Phase 4 的后台任务由 SQLite job 表驱动：Web 启动时先把遗留运行任务标为 interrupted，仅在仍有 attempt 额度时重排声明为 idempotent 的任务，再启动固定数量 worker；取消和 deadline 只在 handler 显式阶段边界生效，不伪装能够强杀正在运行的 SDK 请求。

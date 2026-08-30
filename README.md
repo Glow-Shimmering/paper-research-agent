@@ -8,18 +8,21 @@
 - 混合检索：BM25 关键词 + 本地语义向量（fastembed，CPU 推理），RRF 融合
 - 问答：OpenAI 兼容 API（DeepSeek / OpenAI / 通义等），未配置 key 时退回纯检索；CLI、TUI 与 Web 均支持流式输出；回答“库里有哪些论文”类问题时以注入的论文库目录为权威来源（正文中的参考文献不算库藏）
 - 受控 Agent：显式 run 状态、调用预算、工具效果分类、写入/联网确认与可恢复执行
-- Web 端 Agent：SSE 流式对话、实时工具调用卡片、可视化确认票据、证据高亮与 run 审计侧栏
+- Web 端 Agent：SSE 流式对话、实时工具调用卡片、可视化确认票据、证据高亮与 run 审计侧栏；SSE 断开不释放会话排他权，取消事件在阶段边界终止回合
 - Web 会话恢复：project 绑定、OpenAI-compatible transcript 与冻结确认票据原子持久化；页面刷新可重绘，重启后只能继续/取消原参数动作
 - 持久研究项目：创建 project、编辑/排序研究问题、从现有本地论文库选择来源，刷新或重启后恢复
 - 多来源发现：arXiv、Semantic Scholar、Crossref 聚合检索与 deterministic dedupe；普通网页经 SSRF-safe fetch 保存可追溯 snapshot
 - 统一全文：下载 PDF 与网页抽取正文共用 chunk/embed/hybrid-search/evidence 管线
 - 单篇精读：SQLite 后台任务生成九栏证据卡，支持进度、原文抽屉、单栏重生成、人工 revision、历史与 stale 提示
+- 跨论文比较与综述：项目内选择 2–20 个来源生成比较矩阵（自定义维度）、证据约束的综述提纲与逐节章节草稿
+- 引用与导出：CSL-JSON 规范化 + 五种内置样式（GB/T 7714、APA 7、IEEE、Chicago、MLA）；确定性 Markdown/DOCX/CSV/JSON 导出与 Web 预览
 - 证据链：单篇检索、页面/相邻分块深读、稳定 evidence ID、固定证据与引用校验
-- 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景
+- 研究工作台：Dashboard、任务中心（全局 job 轮询与取消）、项目内证据与版本化笔记、中文帮助页与空状态引导
+- 可审计：Agent run 与结构化事件持久化；内置 37 个无网络、确定性的状态机/引用合同场景，另含四条端到端产品旅程回归
 - CLI 与本地 Web 界面双入口（统一命令名 `pra`）
 - 索引过程只读：解析元数据建库浏览，不改动已有 PDF；下载工具会新增或原子替换同 arXiv 编号文件
 
-设计细节见 [架构说明](docs/architecture.md)、[产品工作流](docs/product-workflows.md)与[来源抓取安全](docs/source-security.md)。如果你准备接管而不是继续扩功能，请从[核心链路接管指南](docs/ownership/README.md)开始。
+设计细节见 [架构说明](docs/architecture.md)、[产品工作流](docs/product-workflows.md)、[来源抓取安全](docs/source-security.md)、[数据模型](docs/data-model.md)与[评估口径](docs/evaluation.md)。如果你准备接管而不是继续扩功能，请从[核心链路接管指南](docs/ownership/README.md)开始。
 
 ## 安装
 
@@ -76,7 +79,7 @@ pra websearch "llm survey"   # 联网检索 arXiv 论文（英文效果更佳）
 pra ask "这篇论文提出了什么方法？"   # 问答（需 API key，默认流式输出；--no-stream 关闭）
 pra ask --web "问题"         # 问答时同时联网检索 arXiv 论文
 pra chat                     # 受控 Agent TUI：需要 API key；回答逐字流式渲染，联网/写操作需 /confirm
-pra serve                    # 启动 Web 界面 http://127.0.0.1:8000（研究项目 + 兼容工作台）
+pra serve                    # 启动 Web 界面 http://127.0.0.1:8000（研究工作台 + 兼容工作台）
 pra status                   # 库与配置状态
 pra import-pagent --source ~/.pagent          # 只读检查旧 Pagent 数据（默认 dry-run）
 pra import-pagent --source ~/.pagent --execute # 校验后复制导入到 PRA_DATA_DIR
@@ -87,7 +90,7 @@ pra --version                # 显示当前版本（版本号与 wheel 元数据
 
 Windows 下 CLI 会把标准输出和错误输出配置为 UTF-8，含数学符号等 Unicode 文本的检索结果可以直接输出或重定向到 UTF-8 文件。
 
-`pra serve` 默认只监听本机。主页保留原检索/问答/Agent/论文库兼容工作台，并提供「研究项目」「发现」「来源库」入口；project/question/source membership、canonical identity 与 provider provenance 全部写入 SQLite，页面刷新与服务重启后仍可恢复。Discover 可聚合 fixture-tested providers、显示 dedupe badges、把题录加入项目，并在用户显式操作后下载 arXiv PDF 或安全抓取普通网页；Library 显示 indexed/failed 状态并提供重试。研究工作区使用服务端 Jinja 模板与 wheel 内置 HTMX，写表单采用 SameSite double-submit CSRF token；JSON/UI 不返回主机绝对路径、snapshot locator、provider raw metadata 或抽取全文。
+`pra serve` 默认只监听本机。研究工作台提供「工作台」（Dashboard：项目、最近来源、进行中任务与库统计）、「研究项目」「发现」「来源库」「任务中心」（全局 job 轮询与取消）与「帮助」页；主页保留原检索/问答/Agent/论文库兼容工作台。project/question/source membership、canonical identity、provider provenance、artifact revision、笔记与 job 全部写入 SQLite，页面刷新与服务重启后仍可恢复。Discover 可聚合 fixture-tested providers、显示 dedupe badges、把题录加入项目，并在用户显式操作后下载 arXiv PDF 或安全抓取普通网页；Library 显示 indexed/failed 状态并提供重试。研究工作区使用服务端 Jinja 模板与 wheel 内置 HTMX（不依赖 Node/CDN），写表单采用 SameSite double-submit CSRF token；JSON/UI 不返回主机绝对路径、snapshot locator、provider raw metadata 或抽取全文。
 
 使用 `--host 0.0.0.0`、非 loopback Host 或 HTTPS 反向代理时必须设置 `PRA_WEB_API_KEY`；Web 页面会在首次 API 请求时询问 key，并仅在当前浏览器会话中保存。直接远程监听还必须同时传入 `--ssl-certfile` 与 `--ssl-keyfile`，或让 HTTPS 反向代理转发到 `127.0.0.1`（并正确转发原始 scheme/host）。仅在可信隔离网络中，才可显式添加 `--allow-insecure-http` 使用明文 HTTP。
 
@@ -115,6 +118,8 @@ Python 3.11 可使用已验证的完整版本约束集复现开发环境；3.10/
 .venv\Scripts\python -m pytest -q
 .venv\Scripts\python scripts\check_tmp_space.py
 .venv\Scripts\python scripts\smoke_research.py
+.venv\Scripts\python scripts\security_review.py
+.venv\Scripts\python scripts\backup_restore_drill.py
 .venv\Scripts\python -m pip wheel . --no-deps --wheel-dir dist
 .venv\Scripts\python scripts\check_wheel.py dist
 ```
@@ -127,4 +132,4 @@ Python 3.11 可使用已验证的完整版本约束集复现开发环境；3.10/
 
 GitHub Actions 会在 Windows/Python 3.11 与 Ubuntu/Python 3.10、3.11、3.12 上执行测试，并在 3.11 上检查约束依赖与 wheel 资源。
 
-37 个 Agent 场景使用版本化 JSON 和脚本化 LLM/工具结果，不访问网络；它们用于回归状态机、预算和结构化引用合同，覆盖成功、拒答、引用错误、确认/取消、工具失败、重试和预算熔断等路径。真实 `chat_turn` 与工具确认边界由 `tests/test_chat.py`、`tests/test_tools.py` 的集成测试覆盖。该确定性场景集不调用真实模型，也不用于宣称模型具备提示注入抵抗能力，或引用证据与回答论断之间已经通过语义蕴含验证。
+37 个 Agent 场景使用版本化 JSON 和脚本化 LLM/工具结果，不访问网络；它们用于回归状态机、预算和结构化引用合同，覆盖成功、拒答、引用错误、确认/取消、工具失败、重试和预算熔断等路径。`tests/test_product_journeys.py` 另以纯离线 fixture 覆盖四条核心产品旅程（精读→导出、比较/综述→样式切换导出、发现→入库→混合检索、新鲜度与重启恢复）。真实 `chat_turn` 与工具确认边界由 `tests/test_chat.py`、`tests/test_tools.py` 的集成测试覆盖。所有确定性场景集不调用真实模型，也不用于宣称模型具备提示注入抵抗能力、语义蕴含验证或生成质量——这些必须由真实 provider/LLM 的 live 证据支撑，口径与记录模板见[评估文档](docs/evaluation.md)；`scripts/smoke_live_deepseek.py` 与 `scripts/smoke_live_providers.py` 是需要显式授权与密钥的手动 live 验收入口。

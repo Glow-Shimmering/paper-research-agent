@@ -350,7 +350,12 @@ SQLite 继续作为 100–1000 篇个人库的 source of truth。新增真实版
   - 备份恢复演练：新增 `scripts/backup_restore_drill.py`——临时目录按真实布局构建完整数据（索引/项目/问题/来源/精读卡/笔记/网页快照/任务），文件级备份 + SHA-256 清单校验，空目录恢复后逐项验证（含 snapshot hash 与 hybrid search 可用），全程不触碰真实 `~/.pragent` 与 `~/.pagent`；演练通过（约 0.5s）。
   - 验证：`tests/test_product_journeys.py` 4 条旅程通过；Python 3.14/macOS 完整回归 412 passed（Windows 基线为 407 passed + 1 skipped，差异是符号链接权限测试在 macOS 可执行），`pip check`、`compileall`、`check_tmp_space.py` 通过；`security_review.py` 与 `backup_restore_drill.py` 实际运行通过。
   - 提交状态：7 个文件已暂存；本地 commit 被 Mimosa PreToolUse 钩子拦截——扫描器把 `src/pragent/web/legacy/app.js` 三处**浏览器端** `fetch()`（`api`/`apiStream`，调用方全部为硬编码同源相对路径 `/api/ask`、`/api/agent/chat` 等）判为 SSRF 高危。评估为误报：SSRF 指**服务端**请求攻击者可控 URL；服务端防护在 `ingestion/safe_fetch.py` 并由 `tests/test_safe_fetch.py` 等覆盖，且该文件自 Step 27 后未改动（Step 27 记录 Mimosa 审计 findingCount=0）。待用户对钩子裁决（白名单/放行/重构）后落提交；为迎合扫描器修改无关的既有工作代码不在本计划范围内。
-- [ ] Step 29：更新 README/架构/工作流/数据模型/安全/评估文档，构建 wheel，并完成从空目录安装到 `pra serve` 的发布验收。
+- [x] Step 29：更新 README/架构/工作流/数据模型/安全/评估文档，构建 wheel，并完成从空目录安装到 `pra serve` 的发布验收。
+  - 文档：README 补齐比较矩阵/综述、CSL 引用与四格式导出、研究工作台（Dashboard、任务中心、证据与笔记、帮助）能力面与四条产品旅程回归，并明确 live 验收入口与限制；product-workflows 移除过时的"导出属于后续 Step"表述、新增 Dashboard/任务中心/帮助（§0）与项目证据/研究笔记（§8）章节并修复章节编号；architecture 补记研究工作台页面共享边界并在测试边界链接评估文档；data-model/source-security/evaluation 此前已随对应步骤更新。
+  - wheel：`pip wheel . --no-deps` 构建通过 `check_wheel.py`——资源清单覆盖全部模板/静态/CSL 样式，隔离 venv 安装 smoke 通过 `pra 0.1.0`。
+  - 发布验收：全新 venv 仅从 wheel 安装包（依赖经父 venv site-packages 提供以保持离线），`pra --version` 输出 `pra 0.1.0`；`pra status` 在空 `PRA_DATA_DIR` 自动建库且未触碰 `~/.pragent`；`pra serve --port 8765` 启动后 `/api/status` 返回正确 JSON，`/ui/`、`/ui/dashboard`、`/ui/projects`、`/ui/jobs`、`/ui/help` 全部 200 且 Dashboard 渲染"研究工作台"，随后停止进程并清理验收目录。
+  - 验证：Windows 完整回归 `411 passed, 1 skipped`，临时目录 95 MB；`pip check`、compileall、Phase 3/4 offline smoke、`security_review.py`（0 发现）、`backup_restore_drill.py`（通过，约 0.6s）、`node --check` 全部通过。
+  - 遗留边界（非阻塞）：真实 DeepSeek/provider live smoke 属于需用户显式授权与密钥的验收（规则 6），命令与记录模板见 `docs/evaluation.md`；未执行不阻塞发布验收，也不得用 scripted 测试宣称模型质量。
 
 **Gate：** 三条核心用户旅程全部通过；服务重启不会丢项目/artifact/job/session；所有 live 结果与限制分开记录，不能用 scripted tests 宣称模型质量。
 

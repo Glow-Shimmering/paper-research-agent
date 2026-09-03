@@ -410,6 +410,11 @@ select:focus-visible {
   box-shadow: 0 0 0 3px rgba(58, 157, 120, 0.12);
 }
 
+.status-dot.library {
+  background: var(--blue);
+  box-shadow: 0 0 0 3px rgba(49, 95, 147, 0.12);
+}
+
 .workspace-shell {
   min-width: 0;
   height: calc(100vh - 34px);
@@ -868,7 +873,8 @@ select:focus-visible {
 }
 
 .memory-banner,
-.memory-success {
+.memory-success,
+.library-scope {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -879,6 +885,37 @@ select:focus-visible {
   border: 1px solid #b8d9d1;
   border-radius: 12px;
   background: var(--teal-soft);
+}
+
+.library-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: -8px 0 16px;
+  padding: 11px;
+  color: #405a71;
+  border: 1px solid #ccdceb;
+  border-radius: 12px;
+  background: #f1f6fb;
+}
+
+.library-scope .memory-icon {
+  background: var(--blue);
+}
+
+.library-scope strong,
+.library-scope small {
+  display: block;
+}
+
+.modal .library-scope {
+  margin: 10px 0 0;
+}
+
+.library-scope small {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .memory-banner.muted {

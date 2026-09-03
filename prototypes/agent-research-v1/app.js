@@ -44,6 +44,7 @@ PLE 等经典方法通过分层专家缓解任务之间的参数冲突。新方�
 const DEFAULT_STATE = {
   projectName: "大模型增强多任务推荐",
   workspacePath: "D:\\Research\\llm-mtl-review",
+  libraryPath: "D:\\Research\\paper-library",
   activeChatId: "chat-main",
   chatOrder: ["chat-main"],
   chatMeta: {
@@ -187,9 +188,11 @@ function createChat() {
 }
 
 function createProject(name, workspacePath) {
+  const globalLibraryPath = state.libraryPath;
   state = cloneDefaultState();
   state.projectName = name;
   state.workspacePath = workspacePath;
+  state.libraryPath = globalLibraryPath;
   state.chatMeta["chat-main"].title = "默认对话";
   state.chatMeta["chat-main"].status = "等待首次提问 · 标题将自动生成";
   localStorage.removeItem(STORAGE_KEY);
@@ -214,6 +217,8 @@ function render() {
   document.querySelector("#header-chat-title").textContent = state.chatMeta[state.activeChatId]?.title || "新对话";
   document.querySelector("#workspace-path").textContent = state.workspacePath;
   document.querySelector("#workspace-path").title = state.workspacePath;
+  document.querySelector("#library-path").textContent = state.libraryPath;
+  document.querySelector("#library-path").title = state.libraryPath;
   document.querySelector("#memory-count").textContent = state.memoryPublished ? "1" : "0";
   document.querySelector("#context-scope").textContent = `可询问并修改“目标”至“${stage.label}”阶段`;
   renderChatList();
@@ -278,7 +283,7 @@ function stageMessages() {
   const messages = [
     [
       message("agent", `<p>告诉我这个对话要研究的问题或最终想交付什么。我会先读取项目公共记忆，再把目标整理成计划。</p>
-        <div class="inline-card"><strong>当前项目：${escapeHtml(state.projectName)}</strong><br>所有中间文件与输出都将归档到 ${escapeHtml(state.workspacePath)}。</div>`, "研究 Agent · 现在")
+        <div class="inline-card"><strong>当前项目：${escapeHtml(state.projectName)}</strong><br>中间文件与输出归档到 ${escapeHtml(state.workspacePath)}；论文统一读取和保存到共享论文库 ${escapeHtml(state.libraryPath)}。</div>`, "研究 Agent · 现在")
     ],
     [
       message("user", `<p>${goal}</p>`),
@@ -372,6 +377,7 @@ function renderStart() {
         <h2>这个对话要继续研究什么？</h2>
         <p>所有对话共享项目工作区和公共记忆，但各自保留独立的消息、计划与研究产物。</p>
         ${state.memoryPublished ? `<div class="memory-banner"><span class="memory-icon">MD</span><span><strong>已加载项目公共记忆</strong><small>${escapeHtml(state.memoryFile)} · 来自“主题调研到综述”</small></span><button class="text-button" type="button" data-action="show-memory">查看</button></div>` : `<div class="memory-banner muted"><span class="memory-icon">夹</span><span><strong>项目工作区已连接</strong><small>${escapeHtml(state.workspacePath)}</small></span><button class="text-button" type="button" data-action="show-project">设置</button></div>`}
+        <div class="library-scope"><span class="memory-icon">库</span><span><strong>当前项目可访问全局论文库</strong><small>${escapeHtml(state.libraryPath)} · 所有项目共享、下载前自动去重</small></span><button class="text-button" type="button" data-action="show-settings">设置</button></div>
         <div class="goal-examples">
           <button class="example-card" type="button" data-example="帮我调研大模型如何增强多任务推荐，重点关注 2023 年后的方法、稳定收益和可复现方案。">
             <strong>主题调研到综述</strong><span>围绕一个研究问题，完成检索、筛选、精读、比较和写作。</span>
@@ -434,7 +440,7 @@ function renderPlan() {
 function renderApproval() {
   const approvals = [
     { id: "search", title: "联网检索学术来源", detail: "发送检索词和筛选条件；不会发送本地论文正文。", badge: "联网" },
-    { id: "download", title: "下载并索引入选论文", detail: "仅在论文筛选确认后执行；文件保存在本机。", badge: "本地写入" },
+    { id: "download", title: "向共享论文库补充入选论文", detail: "先按 DOI、arXiv ID、规范 URL 和文件哈希去重；只下载论文库尚未存在的论文。", badge: "论文库写入" },
     { id: "model", title: "批量调用模型进行精读与综合", detail: "预计 6 篇论文、8–14 次模型调用；提交选中的文本片段。", badge: "模型额度" }
   ];
   return `
@@ -455,10 +461,10 @@ function renderApproval() {
 
 function renderPapers() {
   return `
-    ${heading("步骤 3 · 候选论文", "Agent 推荐，你做最终决定", "24 篇候选已去重。这里展示 6 篇代表结果及其进入精读的理由。", "已选 ${state.selectedPapers.length} 篇")}
+    ${heading("步骤 3 · 候选论文", "Agent 推荐，你做最终决定", "结果同时检索共享论文库与在线来源；已存在的论文直接复用，只补充缺失论文。", "已选 ${state.selectedPapers.length} 篇")}
     <div class="toolbar">
       <div class="toolbar-group"><input class="search-mini" id="paper-filter" placeholder="筛选标题或标签"><button class="subtle-button" type="button" data-action="select-recommended">恢复 Agent 推荐</button></div>
-      <div class="toolbar-group"><span class="badge gray">3 个来源</span><span class="badge teal">24 篇去重结果</span></div>
+      <div class="toolbar-group"><span class="badge gray">论文库已有 2 篇</span><span class="badge blue">待下载 3 篇</span><span class="badge teal">重复下载 0 篇</span></div>
     </div>
     <div class="paper-list" id="paper-list">
       ${PAPERS.map((paper) => `
@@ -655,11 +661,11 @@ function openEvidence() {
 
 function openSettings() {
   openModal(`
-    <div class="modal-header"><div><span class="eyebrow">原型范围外</span><h2 id="modal-title">模型与数据设置</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
-    <p class="modal-copy">设置不会成为研究流程的主入口。正式产品计划在这里管理模型、默认预算、数据目录和隐私边界。</p>
+    <div class="modal-header"><div><span class="eyebrow">Agent 全局设置</span><h2 id="modal-title">模型与共享论文库</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <p class="modal-copy">论文库不属于任何单个项目。所有项目都能读取它，并只向其中补充去重后的新论文。</p>
     <section class="card"><div class="section-row"><h3>默认研究模型</h3><span class="badge teal">deepseek-v4-flash</span></div><p>仅为原型展示，本页面不会读取你的 .env。</p></section>
-    <section class="card"><div class="section-row"><h3>论文与产物</h3><span class="badge gray">保存在本机</span></div><p>原型不会访问现有论文库或 SQLite 数据库。</p></section>
-    <div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">知道了</button></div>`);
+    <section class="card"><div class="section-row"><h3>全局共享论文库</h3><span class="badge blue">所有项目可访问</span></div><label class="field-label">论文库文件夹<div class="path-input-row"><input id="library-path-input" value="${escapeHtml(state.libraryPath)}"><button class="secondary-button" type="button" data-action="choose-library">选择文件夹</button></div></label><p class="field-help">去重优先级：DOI → arXiv ID → 规范 URL → 文件 SHA-256。</p></section>
+    <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="save-global-settings">保存全局设置</button></div>`);
 }
 
 function openRunDetail() {
@@ -673,10 +679,11 @@ function openRunDetail() {
 function openProjectDialog(isNew = false) {
   openModal(`
     <div class="modal-header"><div><span class="eyebrow">${isNew ? "新建项目" : "项目设置"}</span><h2 id="modal-title">${isNew ? "先选择项目工作区" : escapeHtml(state.projectName)}</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
-    <p class="modal-copy">工作区用于保存下载的论文、中间文件、导出结果和项目公共记忆。一个项目可以包含多个独立对话。</p>
+    <p class="modal-copy">项目工作区只保存中间文件、输出和公共记忆。下载的论文统一放入全局共享论文库，不在项目之间复制。</p>
     <label class="field-label">项目名称<input id="project-name-input" value="${isNew ? "" : escapeHtml(state.projectName)}" placeholder="例如：多任务推荐论文研究"></label>
     <label class="field-label" style="margin-top:12px">项目工作区<div class="path-input-row"><input id="workspace-input" value="${isNew ? "D:\\Research\\new-paper-project" : escapeHtml(state.workspacePath)}" placeholder="选择或输入本地文件夹"><button class="secondary-button" type="button" data-action="choose-workspace">选择文件夹</button></div></label>
-    <div class="workspace-preview"><span class="memory-icon">夹</span><span><strong>这个目录归项目所有</strong><small>不会把其他项目的论文、记忆或对话混入当前上下文。</small></span></div>
+    <div class="workspace-preview"><span class="memory-icon">夹</span><span><strong>这个目录归项目所有</strong><small>不会混入其他项目的记忆或对话；论文通过全局共享库访问。</small></span></div>
+    <div class="library-scope"><span class="memory-icon">库</span><span><strong>共享论文库：${escapeHtml(state.libraryPath)}</strong><small>当前项目可读取全部论文，并向其中补充去重后的新论文。</small></span></div>
     <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="${isNew ? "create-project-confirm" : "save-project-settings"}">${isNew ? "创建项目并进入" : "保存项目设置"}</button></div>`);
 }
 
@@ -703,7 +710,7 @@ function openProjectContext() {
   const accessibleStages = STAGES.slice(0, state.maxVisited + 1).map((stage) => stage.label).join("、");
   openModal(`
     <div class="modal-header"><div><span class="eyebrow">对话可用上下文</span><h2 id="modal-title">当前及历史阶段均可追问和修改</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
-    <div class="source-detail"><div><span>当前对话阶段</span><strong>${STAGES[state.stage].label}</strong></div><div><span>可访问阶段</span><strong>${accessibleStages}</strong></div><div><span>项目公共记忆</span><strong>${state.memoryPublished ? state.memoryFile : "尚未创建"}</strong></div><div><span>项目工作区</span><strong>${escapeHtml(state.workspacePath)}</strong></div></div>
+    <div class="source-detail"><div><span>当前对话阶段</span><strong>${STAGES[state.stage].label}</strong></div><div><span>可访问阶段</span><strong>${accessibleStages}</strong></div><div><span>项目公共记忆</span><strong>${state.memoryPublished ? state.memoryFile : "尚未创建"}</strong></div><div><span>项目工作区</span><strong>${escapeHtml(state.workspacePath)}</strong></div><div><span>全局论文库</span><strong>${escapeHtml(state.libraryPath)}</strong></div><div><span>论文访问范围</span><strong>共享论文库中的全部论文</strong></div></div>
     <p class="modal-copy">对话修改某个历史阶段后，依赖该阶段的后续产物会标记为需要重新生成；原型用“已根据对话修改 · v2”展示这种关系。</p>
     <div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">返回对话</button></div>`);
 }
@@ -848,6 +855,19 @@ document.addEventListener("click", (event) => {
   } else if (action === "choose-workspace") {
     document.querySelector("#workspace-input").value = "D:\\Research\\paper-agent-web-v1";
     showToast("原型：已选择示例工作区");
+  } else if (action === "choose-library") {
+    document.querySelector("#library-path-input").value = "D:\\Research\\shared-paper-library";
+    showToast("原型：已选择示例论文库文件夹");
+  } else if (action === "save-global-settings") {
+    const libraryPath = document.querySelector("#library-path-input").value.trim();
+    if (!libraryPath) {
+      showToast("共享论文库文件夹不能为空");
+      return;
+    }
+    state.libraryPath = libraryPath;
+    render();
+    closeModal();
+    showToast("全局共享论文库设置已保存");
   } else if (action === "create-project-confirm") {
     const name = document.querySelector("#project-name-input").value.trim();
     const workspace = document.querySelector("#workspace-input").value.trim();

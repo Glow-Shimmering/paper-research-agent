@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>PRAgent Web V1.2 产品原型</title>
+  <title>PRAgent Web V1.3 产品原型</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="prototype-strip">
-    <span>产品原型 V1.2</span>
+    <span>产品原型 V1.3</span>
     <strong>全部为演示数据，不会联网或调用模型；工作区写入仅模拟</strong>
     <button class="strip-button" type="button" data-action="reset">重置原型</button>
   </div>
@@ -43,6 +43,7 @@
       <div class="sidebar-footer">
         <button type="button" data-action="show-memory"><span aria-hidden="true">◇</span> 项目公共记忆 <span class="memory-count" id="memory-count">0</span></button>
         <button type="button" data-action="show-settings"><span aria-hidden="true">⚙</span> 模型与数据设置</button>
+        <div class="workspace-note"><span class="status-dot library"></span><span><small>全局共享论文库</small><strong id="library-path">D:\Research\paper-library</strong></span></div>
         <div class="workspace-note"><span class="status-dot"></span><span><small>项目工作区</small><strong id="workspace-path">D:\Research\llm-mtl-review</strong></span></div>
       </div>
     </aside>

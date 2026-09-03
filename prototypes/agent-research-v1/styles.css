@@ -142,6 +142,59 @@ select:focus-visible {
   font-size: 11px;
 }
 
+.project-switcher {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: white;
+}
+
+.project-switcher:hover {
+  border-color: #a8c7c0;
+}
+
+.project-switcher small,
+.project-switcher strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-switcher small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.project-switcher strong {
+  font-size: 11px;
+}
+
+.project-glyph {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: white;
+  border-radius: 8px;
+  background: var(--teal);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.sidebar-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
 .new-research {
   width: 100%;
   display: flex;
@@ -154,6 +207,20 @@ select:focus-visible {
   border-radius: 10px;
   background: var(--navy);
   font-weight: 700;
+}
+
+.square-button {
+  padding: 0 10px;
+  color: var(--navy);
+  border: 1px solid #cfd8d4;
+  border-radius: 10px;
+  background: white;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.square-button:hover {
+  background: var(--paper-soft);
 }
 
 .new-research:hover {
@@ -256,6 +323,46 @@ select:focus-visible {
   margin: 10px 8px 0;
   color: var(--muted);
   font-size: 10px;
+}
+
+.memory-count {
+  float: right;
+  min-width: 18px;
+  padding: 1px 5px;
+  text-align: center;
+  border-radius: 999px;
+  background: #e6ece9;
+  font-size: 9px;
+}
+
+.workspace-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 8px 0;
+  color: var(--muted);
+}
+
+.workspace-note .status-dot {
+  margin-top: 5px;
+}
+
+.workspace-note small,
+.workspace-note strong {
+  display: block;
+}
+
+.workspace-note small {
+  font-size: 9px;
+}
+
+.workspace-note strong {
+  max-width: 180px;
+  overflow: hidden;
+  color: #46514d;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -535,6 +642,33 @@ select:focus-visible {
   margin-top: 10px;
 }
 
+.conversation-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.conversation-prompts > span {
+  width: 100%;
+  color: #85908c;
+  font-size: 9px;
+}
+
+.conversation-prompts button {
+  padding: 5px 8px;
+  text-align: left;
+  color: var(--teal);
+  border: 1px solid #c4dbd5;
+  border-radius: 999px;
+  background: white;
+  font-size: 9px;
+}
+
+.conversation-prompts button:hover {
+  background: var(--teal-soft);
+}
+
 .quick-chip {
   padding: 5px 8px;
   color: var(--teal);
@@ -617,6 +751,44 @@ select:focus-visible {
   padding: 24px;
 }
 
+.revision-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 9px 11px;
+  color: var(--teal);
+  border: 1px solid #bad9d1;
+  border-radius: 10px;
+  background: var(--teal-soft);
+  font-size: 10px;
+}
+
+.revision-banner span {
+  min-width: 0;
+  overflow: hidden;
+  color: #46635d;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.revision-banner.stale {
+  color: var(--amber);
+  border-color: #ecd1a6;
+  background: var(--amber-soft);
+}
+
+.revision-banner.stale span {
+  flex: 1;
+  color: #76542b;
+}
+
+.revision-banner.stale .secondary-button {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  font-size: 9px;
+}
+
 .artifact-empty {
   min-height: 100%;
   display: grid;
@@ -656,6 +828,115 @@ select:focus-visible {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 22px;
+}
+
+.memory-banner,
+.memory-success {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 11px;
+  color: #245a52;
+  border: 1px solid #b8d9d1;
+  border-radius: 12px;
+  background: var(--teal-soft);
+}
+
+.memory-banner.muted {
+  color: #53615c;
+  border-color: var(--line);
+  background: var(--paper-soft);
+}
+
+.memory-success {
+  margin: 0 0 16px;
+  padding: 13px;
+}
+
+.memory-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: white;
+  border-radius: 9px;
+  background: var(--teal);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.memory-banner strong,
+.memory-banner small,
+.memory-success strong,
+.memory-success small {
+  display: block;
+}
+
+.memory-banner small,
+.memory-success small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.memory-primary {
+  box-shadow: 0 6px 16px rgba(15, 118, 110, 0.2);
+}
+
+.workspace-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-soft);
+}
+
+.path-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.path-input-row input {
+  margin-top: 0;
+}
+
+.workspace-preview strong,
+.workspace-preview small {
+  display: block;
+}
+
+.workspace-preview small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.memory-preview {
+  max-height: 300px;
+  overflow: auto;
+  margin: 14px 0 0;
+  padding: 14px;
+  white-space: pre-wrap;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f7f9f7;
+  font: 10px/1.7 ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.markdown-editor {
+  width: 100%;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfb;
+  font: 11px/1.65 ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
 .example-card {
@@ -1170,6 +1451,10 @@ select:focus-visible {
   border-right: 0;
 }
 
+.matrix .new-dimension {
+  background: #eef8f5;
+}
+
 .insight-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1201,6 +1486,11 @@ select:focus-visible {
   border-radius: 12px;
   background: white;
   font-family: Georgia, "Songti SC", serif;
+}
+
+.draft.edited {
+  border-color: #94c5ba;
+  box-shadow: inset 3px 0 0 var(--teal);
 }
 
 .draft h2 {

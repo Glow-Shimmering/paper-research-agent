@@ -1,6 +1,6 @@
 "use strict";
 
-const STORAGE_KEY = "pragent-prototype-v1-state";
+const STORAGE_KEY = "pragent-prototype-v1-1-state";
 
 const STAGES = [
   { id: "start", label: "目标", title: "开始一项新研究", status: "等待你的目标" },
@@ -22,7 +22,38 @@ const PAPERS = [
   { id: "p6", score: 78, year: 2022, venue: "SIGIR", title: "Progressive Layered Extraction for Multi-Task Recommender Systems", reason: "不使用 LLM，但属于必要的经典架构基线，适合方法对照。", tag: "经典基线" }
 ];
 
+const DEFAULT_MARKDOWN = `# 大模型增强多任务推荐：方法、证据与研究空白
+
+## 摘要
+
+近年的研究开始使用语言模型补充多任务推荐中的语义信息，但现有证据不支持“大模型在所有任务上普遍更优”的判断。其收益主要出现在行为稀疏、任务语义可描述或需要跨域知识迁移的场景。[1, E-021]
+
+## 1. 从共享参数到语义任务关系
+
+PLE 等经典方法通过分层专家缓解任务之间的参数冲突。新方法将任务描述、物品文本或领域知识编码为语义表示，用于控制专家路由或增加对齐约束。[1, E-014]
+
+## 2. 当前证据的边界
+
+公开实验尚未充分控制参数量、预训练数据和推理成本。更稳妥的结论是：语义增强具有条件性价值，而非替代所有轻量多任务基线。
+
+## 3. 值得验证的研究空白
+
+在统一数据划分和计算预算下，对比冻结 LLM、轻量文本编码器和无语义 PLE，并报告逐任务收益、负迁移率以及成本。
+`;
+
 const DEFAULT_STATE = {
+  projectName: "大模型增强多任务推荐",
+  workspacePath: "D:\\Research\\llm-mtl-review",
+  activeChatId: "chat-main",
+  chatOrder: ["chat-main"],
+  chatMeta: {
+    "chat-main": { title: "主题调研到综述", status: "正在规划" }
+  },
+  chatSnapshots: {},
+  memoryPublished: false,
+  memoryUpdatedAt: "",
+  memoryFile: "research-summary.md",
+  memoryContent: "",
   stage: 0,
   maxVisited: 0,
   goal: "",
@@ -37,6 +68,11 @@ const DEFAULT_STATE = {
   approvals: ["search", "download", "model"],
   progressStep: 0,
   paused: false,
+  customDimensions: [],
+  stageRevisions: {},
+  staleFromStage: null,
+  reviewEdited: false,
+  markdownDraft: DEFAULT_MARKDOWN,
   feedback: {},
   extraMessages: []
 };
@@ -69,6 +105,11 @@ function loadState() {
       ...cloneDefaultState(),
       ...saved,
       plan: { ...DEFAULT_STATE.plan, ...(saved.plan || {}) },
+      chatMeta: { ...DEFAULT_STATE.chatMeta, ...(saved.chatMeta || {}) },
+      chatOrder: saved.chatOrder || DEFAULT_STATE.chatOrder,
+      chatSnapshots: saved.chatSnapshots || {},
+      customDimensions: saved.customDimensions || [],
+      stageRevisions: saved.stageRevisions || {},
       feedback: saved.feedback || {},
       extraMessages: saved.extraMessages || []
     };
@@ -94,6 +135,67 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+const CHAT_FIELDS = [
+  "stage", "maxVisited", "goal", "plan", "selectedPapers", "approvals",
+  "progressStep", "paused", "customDimensions", "stageRevisions", "staleFromStage", "reviewEdited", "markdownDraft", "extraMessages"
+];
+
+function saveActiveChatSnapshot() {
+  const snapshot = {};
+  CHAT_FIELDS.forEach((field) => {
+    snapshot[field] = JSON.parse(JSON.stringify(state[field]));
+  });
+  state.chatSnapshots[state.activeChatId] = snapshot;
+  if (state.chatMeta[state.activeChatId]) {
+    state.chatMeta[state.activeChatId].status = currentChatStatus();
+  }
+}
+
+function restoreChatSnapshot(chatId) {
+  saveActiveChatSnapshot();
+  const snapshot = state.chatSnapshots[chatId];
+  if (!snapshot) return;
+  CHAT_FIELDS.forEach((field) => {
+    state[field] = JSON.parse(JSON.stringify(snapshot[field]));
+  });
+  state.activeChatId = chatId;
+  render();
+}
+
+function createChat(title) {
+  saveActiveChatSnapshot();
+  const chatId = `chat-${Date.now()}`;
+  const defaults = cloneDefaultState();
+  CHAT_FIELDS.forEach((field) => {
+    state[field] = JSON.parse(JSON.stringify(defaults[field]));
+  });
+  state.activeChatId = chatId;
+  state.chatOrder.unshift(chatId);
+  state.chatMeta[chatId] = { title: title || `新研究对话 ${state.chatOrder.length}`, status: "等待目标" };
+  if (state.memoryPublished) {
+    state.extraMessages.push({
+      stage: 0,
+      role: "agent",
+      text: `已加载项目公共记忆 ${state.memoryFile}。你可以在它的基础上提出新问题，不需要重复前一个对话。`,
+      meta: "研究 Agent · 项目记忆已加载"
+    });
+  }
+  render();
+  closeModal();
+  showToast("已在当前项目中新建对话");
+}
+
+function createProject(name, workspacePath) {
+  state = cloneDefaultState();
+  state.projectName = name;
+  state.workspacePath = workspacePath;
+  state.chatMeta["chat-main"].title = "第一个研究对话";
+  localStorage.removeItem(STORAGE_KEY);
+  render();
+  closeModal();
+  showToast("项目和第一个对话已创建");
+}
+
 function showToast(message) {
   window.clearTimeout(toastTimer);
   toast.textContent = message;
@@ -105,7 +207,14 @@ function render() {
   const stage = STAGES[state.stage];
   document.querySelector("#page-title").textContent = stage.title;
   document.querySelector("#agent-status").textContent = stage.status;
-  document.querySelector("#history-status").textContent = stage.id === "review" ? "综述草稿已生成" : `${stage.label}阶段 · 原型`;
+  document.querySelector("#sidebar-project-name").textContent = state.projectName;
+  document.querySelector("#header-project-name").textContent = state.projectName;
+  document.querySelector("#header-chat-title").textContent = state.chatMeta[state.activeChatId]?.title || "新对话";
+  document.querySelector("#workspace-path").textContent = state.workspacePath;
+  document.querySelector("#workspace-path").title = state.workspacePath;
+  document.querySelector("#memory-count").textContent = state.memoryPublished ? "1" : "0";
+  document.querySelector("#context-scope").textContent = `可询问并修改“目标”至“${stage.label}”阶段`;
+  renderChatList();
   renderStageNav();
   renderConversation();
   renderArtifact();
@@ -117,6 +226,24 @@ function render() {
   } else {
     stopProgressTimer();
   }
+}
+
+function renderChatList() {
+  const list = document.querySelector("#chat-list");
+  list.innerHTML = state.chatOrder.map((chatId) => {
+    const meta = state.chatMeta[chatId] || { title: "未命名对话", status: "已保存" };
+    const isActive = chatId === state.activeChatId;
+    return `
+      <button class="history-item ${isActive ? "active" : ""}" type="button" data-chat="${chatId}">
+        <span class="history-icon ${isActive ? "" : "muted"}">话</span>
+        <span><strong>${escapeHtml(meta.title)}</strong><small>${escapeHtml(isActive ? currentChatStatus() : meta.status)}</small></span>
+      </button>`;
+  }).join("");
+}
+
+function currentChatStatus() {
+  if (state.memoryPublished && state.stage === 7) return "已写入项目公共记忆";
+  return `${STAGES[state.stage].label}阶段 · 原型`;
 }
 
 function renderStageNav() {
@@ -145,8 +272,8 @@ function stageMessages() {
   const selectedCount = state.selectedPapers.length;
   const messages = [
     [
-      message("agent", `<p>告诉我你要研究的问题或最终想交付什么。我会先把目标整理成计划，不会立即联网。</p>
-        <div class="inline-card"><strong>你不需要先创建项目。</strong><br>确认计划后，我会自动建立一个可恢复的研究任务。</div>`, "研究 Agent · 现在")
+      message("agent", `<p>告诉我这个对话要研究的问题或最终想交付什么。我会先读取项目公共记忆，再把目标整理成计划。</p>
+        <div class="inline-card"><strong>当前项目：${escapeHtml(state.projectName)}</strong><br>所有中间文件与输出都将归档到 ${escapeHtml(state.workspacePath)}。</div>`, "研究 Agent · 现在")
     ],
     [
       message("user", `<p>${goal}</p>`),
@@ -181,8 +308,22 @@ function renderConversation() {
   const extras = state.extraMessages
     .filter((entry) => entry.stage === state.stage)
     .map((entry) => message(entry.role, `<p>${escapeHtml(entry.text)}</p>`, entry.meta));
-  conversation.innerHTML = [...stageMessages(), ...extras].join("");
+  conversation.innerHTML = [...stageMessages(), ...extras].join("") + renderQuickPrompts();
   conversation.scrollTop = conversation.scrollHeight;
+}
+
+function renderQuickPrompts() {
+  const prompts = [
+    ["基于项目公共记忆继续找研究空白", "先解释这个项目已有的研究结论"],
+    ["把检索范围改为 2024 年以后", "为什么建议精读 6 篇？"],
+    ["模型会收到哪些项目内容？", "取消下载，只保留在线检索"],
+    ["为什么没有选择第 5 篇？", "增加一篇经典基线"],
+    ["暂停后会保留哪些中间文件？", "查看已经完成的精读"],
+    ["更详细解释 LLM-MTR 的语义路由器", "修改实验结论，强调它只在稀疏任务提升"],
+    ["新增“推理成本”比较维度", "详细比较 Text-MTL 和 PLE"],
+    ["把研究空白改写成可执行实验", "修改第二节，减少概括性表述"]
+  ][state.stage];
+  return `<div class="conversation-prompts"><span>可以继续问</span>${prompts.map((prompt) => `<button type="button" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}</div>`;
 }
 
 function configureComposer() {
@@ -201,7 +342,13 @@ function configureComposer() {
 
 function renderArtifact() {
   const renderers = [renderStart, renderPlan, renderApproval, renderPapers, renderProgress, renderDeepRead, renderCompare, renderReview];
-  artifactContent.innerHTML = renderers[state.stage]();
+  const stageId = STAGES[state.stage].id;
+  const revision = state.stageRevisions[stageId];
+  const revisionBanner = revision ? `<div class="revision-banner"><strong>已根据对话修改 · v2</strong><span>${escapeHtml(revision)}</span></div>` : "";
+  const staleBanner = state.staleFromStage !== null && state.stage > state.staleFromStage
+    ? `<div class="revision-banner stale"><strong>上游已修改</strong><span>“${STAGES[state.staleFromStage].label}”阶段发生变化，当前及后续产物需要重新生成。</span><button class="secondary-button" type="button" data-action="regenerate-downstream">重新生成</button></div>`
+    : "";
+  artifactContent.innerHTML = staleBanner + revisionBanner + renderers[state.stage]();
 }
 
 function heading(eyebrow, title, description, badge = "") {
@@ -216,9 +363,10 @@ function renderStart() {
   return `
     <div class="artifact-empty">
       <div class="empty-inner">
-        <span class="eyebrow">从目标开始，而不是从功能菜单开始</span>
-        <h2>你今天想弄清楚什么？</h2>
-        <p>选择一个例子，或直接在左侧描述你的研究问题。Agent 会先给计划，确认后才执行。</p>
+        <span class="eyebrow">${escapeHtml(state.projectName)} · 新对话</span>
+        <h2>这个对话要继续研究什么？</h2>
+        <p>所有对话共享项目工作区和公共记忆，但各自保留独立的消息、计划与研究产物。</p>
+        ${state.memoryPublished ? `<div class="memory-banner"><span class="memory-icon">MD</span><span><strong>已加载项目公共记忆</strong><small>${escapeHtml(state.memoryFile)} · 来自“主题调研到综述”</small></span><button class="text-button" type="button" data-action="show-memory">查看</button></div>` : `<div class="memory-banner muted"><span class="memory-icon">夹</span><span><strong>项目工作区已连接</strong><small>${escapeHtml(state.workspacePath)}</small></span><button class="text-button" type="button" data-action="show-project">设置</button></div>`}
         <div class="goal-examples">
           <button class="example-card" type="button" data-example="帮我调研大模型如何增强多任务推荐，重点关注 2023 年后的方法、稳定收益和可复现方案。">
             <strong>主题调研到综述</strong><span>围绕一个研究问题，完成检索、筛选、精读、比较和写作。</span>
@@ -361,14 +509,15 @@ function renderDeepRead() {
 }
 
 function renderCompare() {
+  const hasCostDimension = state.customDimensions.includes("推理成本");
   return `
-    ${heading("步骤 6 · 跨论文比较", "把论文放进同一组问题里比较", "矩阵来自已确认的精读卡，不让模型绕过原文重新猜测。", "5 篇 · 9 个维度")}
-    <div class="matrix-wrap"><table class="matrix"><thead><tr><th>论文</th><th>LLM 的角色</th><th>任务关系</th><th>主要收益</th><th>关键限制</th></tr></thead><tbody>
-      <tr><td><strong>LLM-MTR</strong><br>2025</td><td>冻结语义编码器</td><td>语义路由</td><td>稀疏任务改善明显 <button class="text-button" data-action="open-evidence">[E-021]</button></td><td>私有数据、提示敏感性未测</td></tr>
-      <tr><td><strong>TaskAlign</strong><br>2024</td><td>任务描述表示</td><td>对齐损失</td><td>减少任务冲突</td><td>训练成本较高</td></tr>
-      <tr><td><strong>FM Survey</strong><br>2024</td><td>分类与综述</td><td>不适用</td><td>统一术语</td><td>缺少统一实证</td></tr>
-      <tr><td><strong>Text-MTL</strong><br>2023</td><td>轻量文本编码</td><td>共享底座</td><td>冷启动提升</td><td>并非完整 LLM</td></tr>
-      <tr><td><strong>PLE</strong><br>2022</td><td>无</td><td>分层专家</td><td>强且低成本的基线</td><td>缺少开放语义知识</td></tr>
+    ${heading("步骤 6 · 跨论文比较", "把论文放进同一组问题里比较", "可以在左侧对话中追问任意单元格，或直接要求 Agent 新建比较维度。", `5 篇 · ${9 + state.customDimensions.length} 个维度`)}
+    <div class="matrix-wrap"><table class="matrix"><thead><tr><th>论文</th><th>LLM 的角色</th><th>任务关系</th><th>主要收益</th>${hasCostDimension ? '<th class="new-dimension">推理成本 <span class="badge teal">对话新增</span></th>' : ""}<th>关键限制</th></tr></thead><tbody>
+      <tr><td><strong>LLM-MTR</strong><br>2025</td><td>冻结语义编码器</td><td>语义路由</td><td>稀疏任务改善明显 <button class="text-button" data-action="open-evidence">[E-021]</button></td>${hasCostDimension ? '<td class="new-dimension">中等：离线编码，在线仅路由</td>' : ""}<td>私有数据、提示敏感性未测</td></tr>
+      <tr><td><strong>TaskAlign</strong><br>2024</td><td>任务描述表示</td><td>对齐损失</td><td>减少任务冲突</td>${hasCostDimension ? '<td class="new-dimension">中等：增加对齐训练</td>' : ""}<td>训练成本较高</td></tr>
+      <tr><td><strong>FM Survey</strong><br>2024</td><td>分类与综述</td><td>不适用</td><td>统一术语</td>${hasCostDimension ? '<td class="new-dimension">不适用</td>' : ""}<td>缺少统一实证</td></tr>
+      <tr><td><strong>Text-MTL</strong><br>2023</td><td>轻量文本编码</td><td>共享底座</td><td>冷启动提升</td>${hasCostDimension ? '<td class="new-dimension">低：轻量编码器</td>' : ""}<td>并非完整 LLM</td></tr>
+      <tr><td><strong>PLE</strong><br>2022</td><td>无</td><td>分层专家</td><td>强且低成本的基线</td>${hasCostDimension ? '<td class="new-dimension">低：无语言模型</td>' : ""}<td>缺少开放语义知识</td></tr>
     </tbody></table></div>
     <div class="insight-grid">
       <article class="insight-card"><strong>共识</strong><p>语义信息在数据稀疏或任务标签信息不足时更有价值。</p></article>
@@ -381,10 +530,11 @@ function renderCompare() {
 
 function renderReview() {
   return `
-    ${heading("步骤 7 · 证据化综述", "草稿是可检查的研究产物", "在对话中继续修改要求；点击引用可以回到支撑它的原文证据。", "草稿 v1")}
+    ${heading("步骤 7 · 证据化综述", "草稿是可编辑、可复用的项目记忆", "在对话中修改内容；确认后导出 MD，并让项目内后续对话以它为公共上下文。", state.memoryPublished ? "公共记忆已更新" : state.reviewEdited ? "草稿 v2" : "草稿 v1")}
+    ${state.memoryPublished ? `<div class="memory-success"><span class="memory-icon">MD</span><span><strong>${escapeHtml(state.memoryFile)} 已成为项目公共记忆</strong><small>项目中的所有新对话都可以读取它；再次导出会创建新版本。</small></span><button class="secondary-button" type="button" data-action="new-chat">基于此记忆新建对话</button></div>` : ""}
     <div class="review-layout">
       <nav class="outline-index" aria-label="综述提纲"><button class="active" type="button">摘要</button><button type="button">1. 问题背景</button><button type="button">2. 方法分类</button><button type="button">3. 实证比较</button><button type="button">4. 空白与建议</button><button type="button">参考文献</button></nav>
-      <article class="draft">
+      <article class="draft ${state.reviewEdited ? "edited" : ""}">
         <h2>大模型增强多任务推荐：方法、证据与研究空白</h2>
         <p><strong>摘要。</strong>近年的研究开始使用语言模型补充多任务推荐中的语义信息，但现有证据不支持“大模型在所有任务上普遍更优”的判断。其收益主要出现在行为稀疏、任务语义可描述或需要跨域知识迁移的场景 <button class="citation" data-action="open-evidence">[1, E-021]</button>。</p>
         <h3>1. 从共享参数到语义任务关系</h3>
@@ -395,7 +545,7 @@ function renderReview() {
         <p>下一步应在统一数据划分和计算预算下，对比冻结 LLM、轻量文本编码器和无语义 PLE，并报告逐任务收益、负迁移率以及成本。该设计能区分收益究竟来自语言知识，还是来自额外参数与训练信号。</p>
       </article>
     </div>
-    <div class="action-bar"><span>导出会冻结当前论文、证据与草稿版本。</span><div><button class="secondary-button" type="button" data-action="export-markdown">导出 Markdown</button><button class="secondary-button" type="button" data-action="export-docx">导出 DOCX</button><button class="primary-button" type="button" data-action="open-feedback">反馈这个原型</button></div></div>`;
+    <div class="action-bar"><span>公共记忆保存在项目工作区，可由多个对话读取和继续修改。</span><div><button class="secondary-button" type="button" data-action="edit-markdown">编辑 Markdown</button><button class="secondary-button" type="button" data-action="export-docx">另存 DOCX</button><button class="primary-button memory-primary" type="button" data-action="publish-memory">${state.memoryPublished ? "导出新版 MD 并更新公共记忆" : "导出 MD 并设为项目公共记忆"}</button></div></div>`;
 }
 
 function advanceTo(index) {
@@ -515,7 +665,127 @@ function openRunDetail() {
     <div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">返回</button></div>`);
 }
 
+function openProjectDialog(isNew = false) {
+  openModal(`
+    <div class="modal-header"><div><span class="eyebrow">${isNew ? "新建项目" : "项目设置"}</span><h2 id="modal-title">${isNew ? "先选择项目工作区" : escapeHtml(state.projectName)}</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <p class="modal-copy">工作区用于保存下载的论文、中间文件、导出结果和项目公共记忆。一个项目可以包含多个独立对话。</p>
+    <label class="field-label">项目名称<input id="project-name-input" value="${isNew ? "" : escapeHtml(state.projectName)}" placeholder="例如：多任务推荐论文研究"></label>
+    <label class="field-label" style="margin-top:12px">项目工作区<div class="path-input-row"><input id="workspace-input" value="${isNew ? "D:\\Research\\new-paper-project" : escapeHtml(state.workspacePath)}" placeholder="选择或输入本地文件夹"><button class="secondary-button" type="button" data-action="choose-workspace">选择文件夹</button></div></label>
+    <div class="workspace-preview"><span class="memory-icon">夹</span><span><strong>这个目录归项目所有</strong><small>不会把其他项目的论文、记忆或对话混入当前上下文。</small></span></div>
+    <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="${isNew ? "create-project-confirm" : "save-project-settings"}">${isNew ? "创建项目并进入" : "保存项目设置"}</button></div>`);
+}
+
+function openNewChatDialog() {
+  openModal(`
+    <div class="modal-header"><div><span class="eyebrow">${escapeHtml(state.projectName)}</span><h2 id="modal-title">在项目中新建对话</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <p class="modal-copy">新对话有独立的消息和研究阶段，但会自动读取项目公共记忆与工作区文件。</p>
+    ${state.memoryPublished ? `<div class="memory-banner"><span class="memory-icon">MD</span><span><strong>将加载 ${escapeHtml(state.memoryFile)}</strong><small>由前一个研究对话生成，可继续修改或深入研究。</small></span></div>` : `<div class="cost-note">当前项目还没有公共记忆。新对话仍可以读取工作区中的论文和文件。</div>`}
+    <label class="field-label">对话名称<input id="chat-title-input" value="基于综述继续研究" placeholder="例如：验证研究空白"></label>
+    <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="create-chat-confirm">创建对话</button></div>`);
+}
+
+function openProjectContext() {
+  const accessibleStages = STAGES.slice(0, state.maxVisited + 1).map((stage) => stage.label).join("、");
+  openModal(`
+    <div class="modal-header"><div><span class="eyebrow">对话可用上下文</span><h2 id="modal-title">当前及历史阶段均可追问和修改</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <div class="source-detail"><div><span>当前对话阶段</span><strong>${STAGES[state.stage].label}</strong></div><div><span>可访问阶段</span><strong>${accessibleStages}</strong></div><div><span>项目公共记忆</span><strong>${state.memoryPublished ? state.memoryFile : "尚未创建"}</strong></div><div><span>项目工作区</span><strong>${escapeHtml(state.workspacePath)}</strong></div></div>
+    <p class="modal-copy">对话修改某个历史阶段后，依赖该阶段的后续产物会标记为需要重新生成；原型用“已根据对话修改 · v2”展示这种关系。</p>
+    <div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">返回对话</button></div>`);
+}
+
+function openMemory() {
+  if (!state.memoryPublished) {
+    openModal(`<div class="modal-header"><div><span class="eyebrow">项目公共记忆</span><h2 id="modal-title">尚未创建公共记忆</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div><p class="modal-copy">完成综述后，使用突出按钮“导出 MD 并设为项目公共记忆”。之后项目中的所有新对话都会加载它。</p><div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">知道了</button></div>`);
+    return;
+  }
+  openModal(`
+    <div class="modal-header"><div><span class="eyebrow">项目公共记忆</span><h2 id="modal-title">${escapeHtml(state.memoryFile)}</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <div class="source-detail"><div><span>保存位置</span><strong>${escapeHtml(state.workspacePath)}\\${escapeHtml(state.memoryFile)}</strong></div><div><span>更新时间</span><strong>${escapeHtml(state.memoryUpdatedAt)}</strong></div><div><span>可见范围</span><strong>当前项目的所有对话</strong></div><div><span>来源</span><strong>主题调研到综述</strong></div></div>
+    <pre class="memory-preview">${escapeHtml(state.memoryContent)}</pre>
+    <div class="modal-actions"><button class="secondary-button" type="button" data-action="edit-memory">修改公共记忆</button><button class="primary-button" type="button" data-action="new-chat">基于记忆新建对话</button></div>`);
+}
+
+function openMarkdownEditor(editingMemory = false) {
+  const content = editingMemory ? state.memoryContent : state.markdownDraft;
+  openModal(`
+    <div class="modal-header"><div><span class="eyebrow">Markdown 编辑器</span><h2 id="modal-title">${editingMemory ? "修改项目公共记忆" : "修改综述草稿"}</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <p class="modal-copy">这里的修改会保存为新版本；公共记忆更新后，新建对话读取最新版本。</p>
+    <textarea class="markdown-editor" id="markdown-editor" rows="20">${escapeHtml(content)}</textarea>
+    <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="${editingMemory ? "save-memory-edit" : "save-markdown"}">保存为新版本</button></div>`);
+}
+
+function downloadMarkdown() {
+  const blob = new Blob([state.markdownDraft], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = state.memoryFile;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function publishMemory() {
+  state.memoryPublished = true;
+  state.memoryContent = state.markdownDraft;
+  state.memoryUpdatedAt = new Date().toLocaleString("zh-CN", { hour12: false });
+  state.chatMeta[state.activeChatId].status = "已写入项目公共记忆";
+  downloadMarkdown();
+  render();
+  showToast("MD 已导出，并设为项目公共记忆");
+}
+
+function respondInContext(text) {
+  let answer = "我已结合当前阶段和之前的研究记录回答。正式产品会把相关产物与证据一并带入本轮对话。";
+  const stageId = STAGES[state.stage].id;
+  const isModification = /修改|改成|改为|补充|删除|强调|减少|增加/.test(text);
+  const historicalStageKeywords = [
+    [0, /目标|研究问题/],
+    [1, /计划|时间范围|交付形式/],
+    [2, /授权|确认|联网|下载/],
+    [3, /论文筛选|候选论文|入选论文/],
+    [4, /执行|任务阶段/],
+    [5, /精读|实验结论|方法结论/],
+    [6, /对比|比较矩阵/],
+    [7, /综述|草稿|章节/]
+  ];
+  const requestedStage = historicalStageKeywords.find(([index, pattern]) => index <= state.stage && pattern.test(text));
+  const targetStageIndex = isModification && requestedStage ? requestedStage[0] : state.stage;
+  const targetStageId = STAGES[targetStageIndex].id;
+
+  if (state.stage === 5 && /路由|细节|详细/.test(text)) {
+    answer = "LLM-MTR 并不在每次推荐时调用大模型。它离线编码任务描述和物品文本，再把语义向量交给门控网络；门控网络为每个任务生成专家权重。论文第 4 页的 E-014 支持这一结构，第 9 页的 E-021 只支持稀疏任务收益，不能外推到所有任务。";
+  } else if (state.stage === 6 && /新增|维度|成本/.test(text)) {
+    if (!state.customDimensions.includes("推理成本")) state.customDimensions.push("推理成本");
+    state.stageRevisions.compare = "通过对话新增“推理成本”维度，并回填 5 篇论文。";
+    answer = "已新增“推理成本”维度，并从精读卡与方法描述中回填 5 篇论文。无法得到精确数值的论文只标记相对等级，不编造成本数据。";
+  } else if (state.stage === 6 && /Text-MTL|PLE|详细|比较/.test(text)) {
+    answer = "Text-MTL 和 PLE 都避免在线调用大模型。Text-MTL 额外使用轻量文本编码器，主要改善冷启动；PLE 只依赖行为信号，计算更低且是更严格的非语义基线。当前证据不足以断言 Text-MTL 在高密度任务上稳定优于 PLE。";
+  } else if (isModification) {
+    state.stageRevisions[targetStageId] = text;
+    if (targetStageIndex < state.stage) state.staleFromStage = targetStageIndex;
+    if (targetStageIndex === 7) state.reviewEdited = true;
+    answer = `已修改“${STAGES[targetStageIndex].label}”阶段产物并保存为 v2。${targetStageIndex < state.stage ? `当前“${STAGES[state.stage].label}”及后续产物已标记为需要重新生成。` : "依赖它的后续阶段会继承新版本。"}原始版本仍可回看。`;
+  } else if (/为什么|之前|检索|选择|第 5 篇/.test(text)) {
+    answer = "我查阅了之前的计划与论文筛选记录：第 5 篇属于尚未正式发表的跨域工作，主题相关但证据权重较低，因此没有进入默认精读集合。你仍可以回到“论文”阶段将它加入，并重新生成受影响的后续产物。";
+  } else if (state.memoryPublished && /记忆|结论|项目/.test(text)) {
+    answer = `当前对话已经加载 ${state.memoryFile}。它保存了前一对话的研究问题、入选论文、关键证据、比较结论和研究空白；我会把它当作项目背景，但不会把其中的推断冒充为新证据。`;
+  }
+
+  state.extraMessages.push({ stage: state.stage, role: "user", text, meta: "你 · 追问或修改" });
+  state.extraMessages.push({ stage: state.stage, role: "agent", text: answer, meta: `研究 Agent · 已读取目标至${STAGES[state.stage].label}阶段` });
+  goalInput.value = "";
+  render();
+}
+
 document.addEventListener("click", (event) => {
+  const chatButton = event.target.closest("[data-chat]");
+  if (chatButton) {
+    restoreChatSnapshot(chatButton.dataset.chat);
+    return;
+  }
+
   const stageButton = event.target.closest("[data-stage]");
   if (stageButton && !stageButton.disabled) {
     const index = Number(stageButton.dataset.stage);
@@ -533,6 +803,13 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const promptButton = event.target.closest("[data-prompt]");
+  if (promptButton) {
+    goalInput.value = promptButton.dataset.prompt;
+    composer.requestSubmit();
+    return;
+  }
+
   const actionElement = event.target.closest("[data-action]");
   if (!actionElement) return;
   const action = actionElement.dataset.action;
@@ -546,11 +823,68 @@ document.addEventListener("click", (event) => {
       render();
       showToast("原型已重置");
     }
-  } else if (action === "resume-current") {
+  } else if (action === "new-project") {
+    openProjectDialog(true);
+  } else if (action === "show-project") {
+    openProjectDialog(false);
+  } else if (action === "choose-workspace") {
+    document.querySelector("#workspace-input").value = "D:\\Research\\paper-agent-web-v1";
+    showToast("原型：已选择示例工作区");
+  } else if (action === "create-project-confirm") {
+    const name = document.querySelector("#project-name-input").value.trim();
+    const workspace = document.querySelector("#workspace-input").value.trim();
+    if (!name || !workspace) {
+      showToast("项目名称和工作区都不能为空");
+      return;
+    }
+    createProject(name, workspace);
+  } else if (action === "save-project-settings") {
+    const name = document.querySelector("#project-name-input").value.trim();
+    const workspace = document.querySelector("#workspace-input").value.trim();
+    if (!name || !workspace) {
+      showToast("项目名称和工作区都不能为空");
+      return;
+    }
+    state.projectName = name;
+    state.workspacePath = workspace;
     render();
-    showToast(`已回到${STAGES[state.stage].label}阶段`);
-  } else if (action === "demo-history") {
-    showToast("V1 先验证新研究主流程，历史详情暂未展开");
+    closeModal();
+    showToast("项目设置已保存");
+  } else if (action === "new-chat") {
+    openNewChatDialog();
+  } else if (action === "create-chat-confirm") {
+    const title = document.querySelector("#chat-title-input").value.trim();
+    createChat(title);
+  } else if (action === "show-context") {
+    openProjectContext();
+  } else if (action === "show-memory") {
+    openMemory();
+  } else if (action === "edit-memory") {
+    openMarkdownEditor(true);
+  } else if (action === "edit-markdown") {
+    openMarkdownEditor(false);
+  } else if (action === "save-markdown") {
+    state.markdownDraft = document.querySelector("#markdown-editor").value;
+    state.reviewEdited = true;
+    state.stageRevisions.review = "已在 Markdown 编辑器中修改综述草稿。";
+    render();
+    closeModal();
+    showToast("综述草稿已保存为 v2");
+  } else if (action === "save-memory-edit") {
+    state.memoryContent = document.querySelector("#markdown-editor").value;
+    state.markdownDraft = state.memoryContent;
+    state.memoryUpdatedAt = new Date().toLocaleString("zh-CN", { hour12: false });
+    state.reviewEdited = true;
+    render();
+    closeModal();
+    showToast("项目公共记忆已更新");
+  } else if (action === "publish-memory") {
+    publishMemory();
+  } else if (action === "regenerate-downstream") {
+    state.stageRevisions[STAGES[state.stage].id] = `已基于“${STAGES[state.staleFromStage].label}”阶段 v2 重新生成。`;
+    state.staleFromStage = null;
+    render();
+    showToast("当前及后续产物已基于上游修改重新生成");
   } else if (action === "show-settings") {
     openSettings();
   } else if (action === "show-run-detail") {
@@ -618,8 +952,8 @@ document.addEventListener("click", (event) => {
     copyText(text).then(() => showToast("全部反馈已复制"));
   } else if (action === "close-modal") {
     closeModal();
-  } else if (action === "export-markdown" || action === "export-docx") {
-    showToast(`原型：${action === "export-markdown" ? "Markdown" : "DOCX"} 导出入口有效，未生成真实文件`);
+  } else if (action === "export-docx") {
+    showToast("原型：DOCX 另存入口有效，未生成真实文件");
   }
 });
 
@@ -655,11 +989,7 @@ composer.addEventListener("submit", (event) => {
     }
     advanceTo(1);
   } else {
-    state.extraMessages.push({ stage: state.stage, role: "user", text, meta: "你 · 补充要求" });
-    state.extraMessages.push({ stage: state.stage, role: "agent", text: "收到。正式产品会据此调整当前计划或产物；原型先记录这条交互。", meta: "研究 Agent · 原型回应" });
-    goalInput.value = "";
-    renderConversation();
-    saveState();
+    respondInContext(text);
   }
 });
 

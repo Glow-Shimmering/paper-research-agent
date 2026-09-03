@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>PRAgent Web V1 产品原型</title>
+  <title>PRAgent Web V1.1 产品原型</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="prototype-strip">
-    <span>产品原型 V1</span>
+    <span>产品原型 V1.1</span>
     <strong>全部为演示数据，不会联网、调用模型或写入论文库</strong>
     <button class="strip-button" type="button" data-action="reset">重置原型</button>
   </div>
@@ -24,38 +24,33 @@
         </div>
       </div>
 
-      <button class="new-research" type="button" data-action="reset">
-        <span aria-hidden="true">＋</span> 新建研究
+      <button class="project-switcher" type="button" data-action="show-project">
+        <span class="project-glyph">项</span>
+        <span><small>当前项目</small><strong id="sidebar-project-name">大模型增强多任务推荐</strong></span>
+        <span aria-hidden="true">⌄</span>
       </button>
 
-      <nav class="history" aria-label="历史研究">
-        <p class="nav-label">最近研究</p>
-        <button class="history-item active" type="button" data-action="resume-current">
-          <span class="history-icon">研</span>
-          <span>
-            <strong>大模型增强多任务推荐</strong>
-            <small id="history-status">正在规划</small>
-          </span>
-        </button>
-        <button class="history-item" type="button" data-action="demo-history">
-          <span class="history-icon muted">存</span>
-          <span>
-            <strong>Agent 证据可靠性</strong>
-            <small>综述已完成 · 8 月 28 日</small>
-          </span>
-        </button>
+      <div class="sidebar-action-row">
+        <button class="new-research" type="button" data-action="new-chat"><span aria-hidden="true">＋</span> 新建对话</button>
+        <button class="square-button" type="button" data-action="new-project" aria-label="新建项目">新项目</button>
+      </div>
+
+      <nav class="history" aria-label="项目对话">
+        <p class="nav-label">项目对话</p>
+        <div id="chat-list"></div>
       </nav>
 
       <div class="sidebar-footer">
+        <button type="button" data-action="show-memory"><span aria-hidden="true">◇</span> 项目公共记忆 <span class="memory-count" id="memory-count">0</span></button>
         <button type="button" data-action="show-settings"><span aria-hidden="true">⚙</span> 模型与数据设置</button>
-        <div class="local-note"><span class="status-dot"></span> 本地数据模式</div>
+        <div class="workspace-note"><span class="status-dot"></span><span><small>项目工作区</small><strong id="workspace-path">D:\Research\llm-mtl-review</strong></span></div>
       </div>
     </aside>
 
     <main class="workspace-shell">
       <header class="workspace-header">
         <div>
-          <div class="breadcrumb">研究任务 <span>/</span> <strong>大模型增强多任务推荐</strong></div>
+          <div class="breadcrumb"><strong id="header-project-name">大模型增强多任务推荐</strong> <span>/</span> <span id="header-chat-title">主题调研到综述</span></div>
           <h1 id="page-title">开始一项新研究</h1>
         </div>
         <div class="header-actions">
@@ -73,14 +68,14 @@
               <span class="agent-avatar">AI</span>
               <div><strong>研究 Agent</strong><small id="agent-status">等待你的目标</small></div>
             </div>
-            <button class="subtle-button" type="button" data-action="show-run-detail">运行详情</button>
+            <button class="subtle-button" type="button" data-action="show-context">已加载项目上下文</button>
           </div>
           <div class="conversation" id="conversation" aria-live="polite"></div>
           <form class="composer" id="composer">
             <label class="sr-only" for="goal-input">告诉 Agent 你的研究目标</label>
             <textarea id="goal-input" rows="3" placeholder="例如：帮我调研大模型如何增强多任务推荐，重点关注 2023 年后的方法和可复现方案。"></textarea>
             <div class="composer-footer">
-              <span>Enter 发送 · Shift+Enter 换行</span>
+              <span id="context-scope">可询问并修改当前及之前阶段</span>
               <button class="primary-button" type="submit" id="send-button">开始规划</button>
             </div>
           </form>

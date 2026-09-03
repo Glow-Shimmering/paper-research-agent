@@ -253,6 +253,43 @@ select:focus-visible {
   background: transparent;
 }
 
+.chat-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: 10px;
+}
+
+.chat-row.active {
+  background: #edf4f1;
+}
+
+.rename-chat {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  margin-right: 5px;
+  color: var(--muted);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 9px;
+  opacity: 0;
+}
+
+.chat-row:hover .rename-chat,
+.chat-row.active .rename-chat,
+.rename-chat:focus-visible {
+  opacity: 1;
+}
+
+.rename-chat:hover {
+  color: var(--teal);
+  background: white;
+}
+
 .history-item:hover,
 .history-item.active {
   border-color: #dce7e3;

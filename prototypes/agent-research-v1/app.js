@@ -73,6 +73,7 @@ const DEFAULT_STATE = {
   staleFromStage: null,
   reviewEdited: false,
   markdownDraft: DEFAULT_MARKDOWN,
+  researchCompleted: false,
   feedback: {},
   extraMessages: []
 };
@@ -137,7 +138,7 @@ function escapeHtml(value) {
 
 const CHAT_FIELDS = [
   "stage", "maxVisited", "goal", "plan", "selectedPapers", "approvals",
-  "progressStep", "paused", "customDimensions", "stageRevisions", "staleFromStage", "reviewEdited", "markdownDraft", "extraMessages"
+  "progressStep", "paused", "customDimensions", "stageRevisions", "staleFromStage", "reviewEdited", "markdownDraft", "researchCompleted", "extraMessages"
 ];
 
 function saveActiveChatSnapshot() {
@@ -162,7 +163,7 @@ function restoreChatSnapshot(chatId) {
   render();
 }
 
-function createChat(title) {
+function createChat() {
   saveActiveChatSnapshot();
   const chatId = `chat-${Date.now()}`;
   const defaults = cloneDefaultState();
@@ -171,7 +172,7 @@ function createChat(title) {
   });
   state.activeChatId = chatId;
   state.chatOrder.unshift(chatId);
-  state.chatMeta[chatId] = { title: title || `新研究对话 ${state.chatOrder.length}`, status: "等待目标" };
+  state.chatMeta[chatId] = { title: "新对话", status: "等待首次提问 · 标题将自动生成" };
   if (state.memoryPublished) {
     state.extraMessages.push({
       stage: 0,
@@ -182,14 +183,15 @@ function createChat(title) {
   }
   render();
   closeModal();
-  showToast("已在当前项目中新建对话");
+  showToast("新对话已创建，首次发送后自动生成标题");
 }
 
 function createProject(name, workspacePath) {
   state = cloneDefaultState();
   state.projectName = name;
   state.workspacePath = workspacePath;
-  state.chatMeta["chat-main"].title = "第一个研究对话";
+  state.chatMeta["chat-main"].title = "默认对话";
+  state.chatMeta["chat-main"].status = "等待首次提问 · 标题将自动生成";
   localStorage.removeItem(STORAGE_KEY);
   render();
   closeModal();
@@ -234,15 +236,18 @@ function renderChatList() {
     const meta = state.chatMeta[chatId] || { title: "未命名对话", status: "已保存" };
     const isActive = chatId === state.activeChatId;
     return `
-      <button class="history-item ${isActive ? "active" : ""}" type="button" data-chat="${chatId}">
-        <span class="history-icon ${isActive ? "" : "muted"}">话</span>
-        <span><strong>${escapeHtml(meta.title)}</strong><small>${escapeHtml(isActive ? currentChatStatus() : meta.status)}</small></span>
-      </button>`;
+      <div class="chat-row ${isActive ? "active" : ""}">
+        <button class="history-item ${isActive ? "active" : ""}" type="button" data-chat="${chatId}">
+          <span class="history-icon ${isActive ? "" : "muted"}">话</span>
+          <span><strong>${escapeHtml(meta.title)}</strong><small>${escapeHtml(isActive ? currentChatStatus() : meta.status)}</small></span>
+        </button>
+        <button class="rename-chat" type="button" data-rename-chat="${chatId}" aria-label="重命名 ${escapeHtml(meta.title)}">改</button>
+      </div>`;
   }).join("");
 }
 
 function currentChatStatus() {
-  if (state.memoryPublished && state.stage === 7) return "已写入项目公共记忆";
+  if (state.researchCompleted) return "已完成 · 公共记忆已更新";
   return `${STAGES[state.stage].label}阶段 · 原型`;
 }
 
@@ -530,8 +535,8 @@ function renderCompare() {
 
 function renderReview() {
   return `
-    ${heading("步骤 7 · 证据化综述", "草稿是可编辑、可复用的项目记忆", "在对话中修改内容；确认后导出 MD，并让项目内后续对话以它为公共上下文。", state.memoryPublished ? "公共记忆已更新" : state.reviewEdited ? "草稿 v2" : "草稿 v1")}
-    ${state.memoryPublished ? `<div class="memory-success"><span class="memory-icon">MD</span><span><strong>${escapeHtml(state.memoryFile)} 已成为项目公共记忆</strong><small>项目中的所有新对话都可以读取它；再次导出会创建新版本。</small></span><button class="secondary-button" type="button" data-action="new-chat">基于此记忆新建对话</button></div>` : ""}
+    ${heading("步骤 7 · 证据化综述", "草稿是可编辑、可复用的项目记忆", "在对话中修改内容；点击完成后自动保存到工作区，并成为项目内所有对话的公共上下文。", state.researchCompleted ? "当前对话已完成" : state.reviewEdited ? "草稿 v2" : "草稿 v1")}
+    ${state.researchCompleted ? `<div class="memory-success"><span class="memory-icon">MD</span><span><strong>${escapeHtml(state.memoryFile)} 已自动保存到项目工作区</strong><small>当前对话已完成，项目中的所有新对话都可以读取这份公共记忆。</small></span><button class="secondary-button" type="button" data-action="new-chat">基于此记忆新建对话</button></div>` : ""}
     <div class="review-layout">
       <nav class="outline-index" aria-label="综述提纲"><button class="active" type="button">摘要</button><button type="button">1. 问题背景</button><button type="button">2. 方法分类</button><button type="button">3. 实证比较</button><button type="button">4. 空白与建议</button><button type="button">参考文献</button></nav>
       <article class="draft ${state.reviewEdited ? "edited" : ""}">
@@ -545,7 +550,7 @@ function renderReview() {
         <p>下一步应在统一数据划分和计算预算下，对比冻结 LLM、轻量文本编码器和无语义 PLE，并报告逐任务收益、负迁移率以及成本。该设计能区分收益究竟来自语言知识，还是来自额外参数与训练信号。</p>
       </article>
     </div>
-    <div class="action-bar"><span>公共记忆保存在项目工作区，可由多个对话读取和继续修改。</span><div><button class="secondary-button" type="button" data-action="edit-markdown">编辑 Markdown</button><button class="secondary-button" type="button" data-action="export-docx">另存 DOCX</button><button class="primary-button memory-primary" type="button" data-action="publish-memory">${state.memoryPublished ? "导出新版 MD 并更新公共记忆" : "导出 MD 并设为项目公共记忆"}</button></div></div>`;
+    <div class="action-bar"><span>完成后自动保存 MD 到工作区，不弹出下载。</span><div><button class="secondary-button" type="button" data-action="edit-markdown">编辑 Markdown</button><button class="secondary-button" type="button" data-action="export-docx">另存 DOCX</button><button class="primary-button memory-primary" type="button" data-action="complete-research">完成</button></div></div>`;
 }
 
 function advanceTo(index) {
@@ -675,13 +680,23 @@ function openProjectDialog(isNew = false) {
     <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="${isNew ? "create-project-confirm" : "save-project-settings"}">${isNew ? "创建项目并进入" : "保存项目设置"}</button></div>`);
 }
 
-function openNewChatDialog() {
+function openRenameChat(chatId) {
+  const meta = state.chatMeta[chatId];
+  if (!meta) return;
   openModal(`
-    <div class="modal-header"><div><span class="eyebrow">${escapeHtml(state.projectName)}</span><h2 id="modal-title">在项目中新建对话</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
-    <p class="modal-copy">新对话有独立的消息和研究阶段，但会自动读取项目公共记忆与工作区文件。</p>
-    ${state.memoryPublished ? `<div class="memory-banner"><span class="memory-icon">MD</span><span><strong>将加载 ${escapeHtml(state.memoryFile)}</strong><small>由前一个研究对话生成，可继续修改或深入研究。</small></span></div>` : `<div class="cost-note">当前项目还没有公共记忆。新对话仍可以读取工作区中的论文和文件。</div>`}
-    <label class="field-label">对话名称<input id="chat-title-input" value="基于综述继续研究" placeholder="例如：验证研究空白"></label>
-    <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="create-chat-confirm">创建对话</button></div>`);
+    <div class="modal-header"><div><span class="eyebrow">对话设置</span><h2 id="modal-title">修改对话标题</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div>
+    <p class="modal-copy">标题默认由模型根据首次提问生成，之后可以随时手动修改。</p>
+    <label class="field-label">对话标题<input id="rename-chat-input" value="${escapeHtml(meta.title)}"></label>
+    <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="save-chat-title" data-chat-id="${chatId}">保存标题</button></div>`);
+}
+
+function generateChatTitle(text) {
+  if (/多任务.*推荐|推荐.*多任务/.test(text)) return "大模型增强多任务推荐";
+  if (/精读/.test(text)) return "论文精读与证据复核";
+  if (/研究空白|gap/i.test(text)) return "研究空白深入分析";
+  if (/对比|比较/.test(text)) return "论文方法对比";
+  const cleaned = text.replace(/[。！？!?，,]/g, " ").trim();
+  return cleaned.length > 16 ? `${cleaned.slice(0, 16)}…` : cleaned || "新对话";
 }
 
 function openProjectContext() {
@@ -695,7 +710,7 @@ function openProjectContext() {
 
 function openMemory() {
   if (!state.memoryPublished) {
-    openModal(`<div class="modal-header"><div><span class="eyebrow">项目公共记忆</span><h2 id="modal-title">尚未创建公共记忆</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div><p class="modal-copy">完成综述后，使用突出按钮“导出 MD 并设为项目公共记忆”。之后项目中的所有新对话都会加载它。</p><div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">知道了</button></div>`);
+    openModal(`<div class="modal-header"><div><span class="eyebrow">项目公共记忆</span><h2 id="modal-title">尚未创建公共记忆</h2></div><button class="close-button" type="button" data-action="close-modal">×</button></div><p class="modal-copy">综述完成后点击“完成”，系统会自动把 MD 保存到项目工作区，并让项目中的所有新对话加载它。</p><div class="modal-actions"><button class="primary-button" type="button" data-action="close-modal">知道了</button></div>`);
     return;
   }
   openModal(`
@@ -714,26 +729,23 @@ function openMarkdownEditor(editingMemory = false) {
     <div class="modal-actions"><button class="secondary-button" type="button" data-action="close-modal">取消</button><button class="primary-button" type="button" data-action="${editingMemory ? "save-memory-edit" : "save-markdown"}">保存为新版本</button></div>`);
 }
 
-function downloadMarkdown() {
-  const blob = new Blob([state.markdownDraft], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = state.memoryFile;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function publishMemory() {
+function completeResearch() {
   state.memoryPublished = true;
   state.memoryContent = state.markdownDraft;
   state.memoryUpdatedAt = new Date().toLocaleString("zh-CN", { hour12: false });
-  state.chatMeta[state.activeChatId].status = "已写入项目公共记忆";
-  downloadMarkdown();
+  state.researchCompleted = true;
+  state.chatMeta[state.activeChatId].status = "已完成 · 公共记忆已更新";
+  const alreadyConfirmed = state.extraMessages.some((entry) => entry.meta === "研究 Agent · 已完成");
+  if (!alreadyConfirmed) {
+    state.extraMessages.push({
+      stage: 7,
+      role: "agent",
+      text: `研究流程已完成。${state.memoryFile} 已自动保存到 ${state.workspacePath}，并成为项目公共记忆。你可以在当前对话继续追问，也可以直接新建对话开展下一步研究。`,
+      meta: "研究 Agent · 已完成"
+    });
+  }
   render();
-  showToast("MD 已导出，并设为项目公共记忆");
+  showToast("已完成：MD 已自动保存为项目公共记忆");
 }
 
 function respondInContext(text) {
@@ -780,6 +792,12 @@ function respondInContext(text) {
 }
 
 document.addEventListener("click", (event) => {
+  const renameButton = event.target.closest("[data-rename-chat]");
+  if (renameButton) {
+    openRenameChat(renameButton.dataset.renameChat);
+    return;
+  }
+
   const chatButton = event.target.closest("[data-chat]");
   if (chatButton) {
     restoreChatSnapshot(chatButton.dataset.chat);
@@ -851,10 +869,17 @@ document.addEventListener("click", (event) => {
     closeModal();
     showToast("项目设置已保存");
   } else if (action === "new-chat") {
-    openNewChatDialog();
-  } else if (action === "create-chat-confirm") {
-    const title = document.querySelector("#chat-title-input").value.trim();
-    createChat(title);
+    createChat();
+  } else if (action === "save-chat-title") {
+    const title = document.querySelector("#rename-chat-input").value.trim();
+    if (!title) {
+      showToast("对话标题不能为空");
+      return;
+    }
+    state.chatMeta[actionElement.dataset.chatId].title = title;
+    render();
+    closeModal();
+    showToast("对话标题已修改");
   } else if (action === "show-context") {
     openProjectContext();
   } else if (action === "show-memory") {
@@ -878,8 +903,8 @@ document.addEventListener("click", (event) => {
     render();
     closeModal();
     showToast("项目公共记忆已更新");
-  } else if (action === "publish-memory") {
-    publishMemory();
+  } else if (action === "complete-research") {
+    completeResearch();
   } else if (action === "regenerate-downstream") {
     state.stageRevisions[STAGES[state.stage].id] = `已基于“${STAGES[state.staleFromStage].label}”阶段 v2 重新生成。`;
     state.staleFromStage = null;
@@ -982,6 +1007,11 @@ composer.addEventListener("submit", (event) => {
 
   if (state.stage === 0) {
     state.goal = text;
+    const activeMeta = state.chatMeta[state.activeChatId];
+    if (activeMeta && ["新对话", "默认对话"].includes(activeMeta.title)) {
+      activeMeta.title = generateChatTitle(text);
+      activeMeta.status = "标题由模型根据首次提问生成";
+    }
     if (text.includes("多任务") || text.includes("推荐")) {
       state.plan.question = "大模型如何增强多任务推荐系统，并在哪些条件下带来稳定收益？";
     } else {
